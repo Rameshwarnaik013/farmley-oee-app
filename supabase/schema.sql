@@ -12,6 +12,7 @@ create table if not exists public.plants (
   id          uuid primary key default gen_random_uuid(),
   name        text not null unique,
   sort_order  int  not null default 0,
+  default_planned_hours numeric not null default 9,  -- 9 std, Kundli 12
   created_at  timestamptz not null default now()
 );
 
@@ -29,6 +30,8 @@ create table if not exists public.machines (
   plant_id    uuid not null references public.plants(id) on delete cascade,
   line_id     uuid not null references public.lines(id) on delete cascade,
   name        text not null,
+  target_output numeric,                 -- Per Shift Production (auto-fills form)
+  units       text,                       -- 'Pcs' or 'Kgs'
   is_active   boolean not null default true,
   created_at  timestamptz not null default now(),
   unique (plant_id, line_id, name)
@@ -113,6 +116,8 @@ create table if not exists public.oee_records (
 
   record_date       date not null default current_date,
   shift             text,
+  number_of_cycles  numeric,                          -- Roasting Line only
+  units             text,                             -- 'Pcs' or 'Kgs'
 
   -- Inputs
   planned_time_hours    numeric not null,                 -- entered in HOURS

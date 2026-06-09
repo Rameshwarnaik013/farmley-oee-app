@@ -4,16 +4,23 @@ import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/AuthContext.jsx'
 import { calculateOEE, hoursToMinutes, formatPct } from '../lib/oee'
 
-const EMPTY = {
-  line_id: '',
-  machine_id: '',
-  record_date: new Date().toISOString().slice(0, 10),
-  shift: '',
-  planned_time_hours: '',
-  downtime_minutes: '',
-  actual_output: '',
-  target_output: '',
-  good_qty: '',
+// Units by line type: Roasting & Mixing in Kgs, Packing in Pieces.
+function unitForLine(lineName) {
+  if (!lineName) return 'pieces'
+  const n = lineName.toLowerCase()
+  if (n.includes('roasting') || n.includes('mixing')) return 'Kgs'
+  return 'pieces'
+}
+
+// Auto Day/Night shift from current IST time + plant rules.
+//  Kundli: 08:00–20:00 IST = Day, else Night.
+//  Others: 09:00–19:00 IST = Day, else Night.
+function defaultShift(plantName) {
+  const istHour = new Date(Date.now() + 5.5 * 3600 * 1000).getUTCHours()
+  const isKundli = (plantName || '').toLowerCase() === 'kundli'
+  const dayStart = isKundli ? 8 : 9
+  const dayEnd = isKundli ? 20 : 19 // exclusive
+  return istHour >= dayStart && istHour < dayEnd ? 'Day' : 'Night'
 }
 
 export default function OEEForm() {
@@ -24,7 +31,7 @@ export default function OEEForm() {
   const [plant, setPlant] = useState(null)
   const [lines, setLines] = useState([])
   const [machines, setMachines] = useState([])
-  const [form, setForm] = useState(EMPTY)
+  const [form, setForm] = useState(null) // initialised once plant loads
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
@@ -44,26 +51,55 @@ export default function OEEForm() {
       setPlant(pl)
       setLines(ln ?? [])
       setMachines(mc ?? [])
+      setForm({
+        line_id: '',
+        machine_id: '',
+        record_date: new Date().toISOString().slice(0, 10),
+        shift: defaultShift(pl?.name),
+        planned_time_hours: pl?.default_planned_hours ?? 9, // per-plant default
+        downtime_minutes: '',
+        actual_output: '',
+        target_output: '', // auto-filled from machine
+        good_qty: '',
+        number_of_cycles: '',
+      })
     }
     load()
   }, [plantId])
 
-  // Machines filtered by the chosen line type (only this plant's machines).
+  const selectedLine = useMemo(
+    () => lines.find((l) => l.id === form?.line_id) || null,
+    [lines, form?.line_id],
+  )
+  const isRoasting = (selectedLine?.name || '').toLowerCase().includes('roasting')
+  const isPacking = (selectedLine?.name || '').toLowerCase().includes('packing')
+  const unit = unitForLine(selectedLine?.name)
+
   const lineMachines = useMemo(
-    () => machines.filter((m) => m.line_id === form.line_id),
-    [machines, form.line_id],
+    () => machines.filter((m) => m.line_id === form?.line_id),
+    [machines, form?.line_id],
   )
 
-  // Live OEE preview — same logic that gets stored.
-  const calc = useMemo(() => calculateOEE(form), [form])
+  const calc = useMemo(() => (form ? calculateOEE(form) : null), [form])
 
   const update = (key) => (e) => {
     const value = e.target.value
+    setForm((f) => ({ ...f, [key]: value }))
+  }
+
+  const onLineChange = (e) => {
+    const line_id = e.target.value
+    setForm((f) => ({ ...f, line_id, machine_id: '', target_output: '' }))
+  }
+
+  // Selecting a machine auto-fills its Target Output (Per Shift Production).
+  const onMachineChange = (e) => {
+    const machine_id = e.target.value
+    const m = machines.find((x) => x.id === machine_id)
     setForm((f) => ({
       ...f,
-      [key]: value,
-      // reset machine when line changes
-      ...(key === 'line_id' ? { machine_id: '' } : {}),
+      machine_id,
+      target_output: m?.target_output ?? '',
     }))
   }
 
@@ -72,7 +108,18 @@ export default function OEEForm() {
     setError('')
     setInfo('')
 
+    // ---- Validation ----
     if (!form.line_id) return setError('Please select a line type.')
+    if ((isRoasting || isPacking) && !form.machine_id)
+      return setError('Machine / sub-line is required for Roasting and Packing lines.')
+    if (form.downtime_minutes === '' )
+      return setError('Downtime (minutes) is required.')
+    if (form.actual_output === '')
+      return setError('Actual Output is required.')
+    if (form.good_qty === '')
+      return setError('Good Qty is required.')
+    if (isRoasting && form.number_of_cycles === '')
+      return setError('Number of Cycles is required for Roasting Line.')
 
     setBusy(true)
     const payload = {
@@ -82,6 +129,8 @@ export default function OEEForm() {
       machine_id: form.machine_id || null,
       record_date: form.record_date,
       shift: form.shift || null,
+      units: unit === 'pieces' ? 'Pcs' : 'Kgs',
+      number_of_cycles: isRoasting ? Number(form.number_of_cycles) || 0 : null,
       planned_time_hours: Number(form.planned_time_hours) || 0,
       downtime_minutes: Number(form.downtime_minutes) || 0,
       actual_output: Number(form.actual_output) || 0,
@@ -104,31 +153,29 @@ export default function OEEForm() {
       return setError(insErr.message)
     }
 
-    // Push the saved row to Google Sheets (server-side edge function).
-    // Failure here does NOT lose the record — it's safely in Supabase.
     try {
-      await supabase.functions.invoke('push-to-sheets', {
-        body: { record_id: data.id },
-      })
+      await supabase.functions.invoke('push-to-sheets', { body: { record_id: data.id } })
     } catch {
-      /* sheet sync is best-effort; ignore network errors */
+      /* sheet sync is best-effort */
     }
 
     setBusy(false)
     setInfo('OEE entry saved.')
-    setForm(EMPTY)
     setTimeout(() => navigate(`/plant/${plantId}`), 700)
   }
 
-  if (!plant) return <div className="loading">Loading…</div>
+  if (!plant || !form) return <div className="loading">Loading…</div>
+
+  const outLabel = (base) =>
+    unit === 'pieces' ? `${base} (pieces)` : `${base} (Kgs)`
 
   return (
     <div>
       <Link to={`/plant/${plantId}`} className="back-link">← {plant.name}</Link>
       <h1 className="page-title">New OEE Entry · {plant.name}</h1>
       <p className="page-sub">
-        Planned Time is entered in <strong>hours</strong> and auto-converts to minutes.
-        Downtime in minutes. Outputs in pieces.
+        Planned Time defaults to {plant.default_planned_hours}h for {plant.name}.
+        Target Output auto-fills from the selected machine.
       </p>
 
       {error && <div className="msg error">{error}</div>}
@@ -137,8 +184,8 @@ export default function OEEForm() {
       <form className="card section" style={{ padding: '1.5rem' }} onSubmit={submit}>
         <div className="form-grid">
           <div>
-            <label>Line type</label>
-            <select value={form.line_id} onChange={update('line_id')} required>
+            <label>Line type *</label>
+            <select value={form.line_id} onChange={onLineChange} required>
               <option value="">Select line…</option>
               {lines.map((l) => (
                 <option key={l.id} value={l.id}>{l.name}</option>
@@ -147,14 +194,19 @@ export default function OEEForm() {
           </div>
 
           <div>
-            <label>Machine / sub-line</label>
+            <label>
+              Machine / sub-line{(isRoasting || isPacking) ? ' *' : ''}
+            </label>
             <select
               value={form.machine_id}
-              onChange={update('machine_id')}
+              onChange={onMachineChange}
               disabled={!form.line_id}
+              required={isRoasting || isPacking}
             >
               <option value="">
-                {form.line_id ? 'Select machine…' : 'Pick a line first'}
+                {form.line_id
+                  ? (lineMachines.length ? 'Select machine…' : 'No machines for this plant/line')
+                  : 'Pick a line first'}
               </option>
               {lineMachines.map((m) => (
                 <option key={m.id} value={m.id}>{m.name}</option>
@@ -173,7 +225,6 @@ export default function OEEForm() {
               type="number" min="0" step="any"
               value={form.planned_time_hours}
               onChange={update('planned_time_hours')}
-              placeholder="e.g. 9"
               required
             />
             <small style={{ color: 'var(--muted)' }}>
@@ -182,52 +233,73 @@ export default function OEEForm() {
           </div>
 
           <div>
-            <label>Downtime (minutes)</label>
+            <label>Downtime (minutes) [Breakdown] *</label>
             <input
               type="number" min="0" step="any"
               value={form.downtime_minutes}
               onChange={update('downtime_minutes')}
               placeholder="e.g. 30"
+              required
             />
           </div>
 
           <div>
-            <label>Shift (optional)</label>
-            <input type="text" value={form.shift} onChange={update('shift')} placeholder="A / B / C" />
+            <label>Shift</label>
+            <select value={form.shift} onChange={update('shift')}>
+              <option value="Day">Day</option>
+              <option value="Night">Night</option>
+            </select>
+            <small style={{ color: 'var(--muted)' }}>Auto-set by IST time; editable</small>
           </div>
 
+          {isRoasting && (
+            <div>
+              <label>Number of Cycles *</label>
+              <input
+                type="number" min="0" step="any"
+                value={form.number_of_cycles}
+                onChange={update('number_of_cycles')}
+                placeholder="e.g. 4"
+                required
+              />
+            </div>
+          )}
+
           <div>
-            <label>Actual Output (pieces)</label>
+            <label>{outLabel('Actual Output')} *</label>
             <input
               type="number" min="0" step="any"
               value={form.actual_output}
               onChange={update('actual_output')}
               placeholder="e.g. 6500"
+              required
             />
           </div>
 
           <div>
-            <label>Target Output (pieces)</label>
+            <label>{outLabel('Target Output')} (auto)</label>
             <input
-              type="number" min="0" step="any"
+              type="number"
               value={form.target_output}
-              onChange={update('target_output')}
-              placeholder="e.g. 9000"
+              readOnly
+              placeholder={form.machine_id ? '' : 'Select a machine'}
+              style={{ background: 'var(--bg)' }}
             />
+            <small style={{ color: 'var(--muted)' }}>From machine’s Per Shift Production</small>
           </div>
 
           <div>
-            <label>Good Qty (pieces)</label>
+            <label>{outLabel('Good Qty')} *</label>
             <input
               type="number" min="0" step="any"
               value={form.good_qty}
               onChange={update('good_qty')}
               placeholder="e.g. 5000"
+              required
             />
           </div>
         </div>
 
-        {/* Live calculated metrics */}
         <div className="metrics">
           <div className="metric">
             <div className="label">Availability</div>

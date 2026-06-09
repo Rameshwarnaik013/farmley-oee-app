@@ -7,3 +7,8 @@ dist-ssr
 .DS_Store
 .vercel
 supabase/.temp
+
+# Apps Script copy with real secrets filled in — never commit
+supabase/apps-script/*.ready.gs
+
+.vercel
