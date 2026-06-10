@@ -319,15 +319,13 @@ function emailLatestAdoption() {
   var dayRows = rows.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
   var nightRows = rows.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
 
-  var props = PropertiesService.getScriptProperties();
-  if (props.getProperty('lastEmailedDate') === maxDate) return;
-
+  // Always send (fixed daily trigger). Keep ONE trigger to avoid duplicates.
   MailApp.sendEmail({
     to: RECIPIENTS,
     subject: 'Farmley OEE — Adoption (Day ' + maxDate + ' / Night ' + prevDate + ')',
     htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows),
   });
-  props.setProperty('lastEmailedDate', maxDate);
+  PropertiesService.getScriptProperties().setProperty('lastEmailedDate', maxDate);
 }
 
 function renderAdoptionTable(title, rows) {
