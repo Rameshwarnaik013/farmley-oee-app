@@ -32,7 +32,7 @@ var RECIPIENTS = [
   'aman.j@farmley.com',
   'sujeet.c@farmley.com',
   'vaibhav.s@farmley.com',
-  'anand.v@farmley.com',
+  'samarth.t@farmley.com', // Samarth Taneja — verify exact address
 ].join(',');
 
 var TEST_EMAIL = 'jatoth.r@farmley.com'; // delivery-test recipient
@@ -202,7 +202,7 @@ function syncNow() {
   writeAdoptionSheet(buildAdoption(records, machines, userMap));
 }
 
-function buildAdoption(records, machines, userMap) {
+function buildAdoption(records, machines, userMap, extraDates) {
   var totalRoast = {}, totalPack = {};
   machines.forEach(function (m) {
     var plant = m.plants ? m.plants.name : '';
@@ -241,6 +241,7 @@ function buildAdoption(records, machines, userMap) {
   Object.keys(totalRoast).forEach(function (p) { plantsWith[p] = 1; });
   Object.keys(totalPack).forEach(function (p) { plantsWith[p] = 1; });
 
+  (extraDates || []).forEach(function (d) { dateSet[d] = 1; }); // ensure email dates appear
   var dates = Object.keys(dateSet).sort();
   var plants = Object.keys(plantsWith).sort();
 
@@ -297,35 +298,45 @@ function writeAdoptionSheet(rows) {
   }
 }
 
+function addDays(dateStr, n) {
+  var d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
 function emailLatestAdoption() {
   var userMap = fetchUserMap();
   var machines = fetchMachines();
   var records = fetchAllRecords();
-  var rows = buildAdoption(records, machines, userMap);
-  if (!rows.length) return;
+  if (!records.length) return;
 
-  var maxDate = rows.reduce(function (a, r) { return r.date > a ? r.date : a; }, rows[0].date);
-  var todays = rows.filter(function (r) { return r.date === maxDate; });
+  var maxDate = records.reduce(function (a, r) {
+    return r.record_date > a ? r.record_date : a;
+  }, records[0].record_date);
+  var prevDate = addDays(maxDate, -1);
+
+  var rows = buildAdoption(records, machines, userMap, [maxDate, prevDate]);
+  var dayRows = rows.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
+  var nightRows = rows.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
 
   var props = PropertiesService.getScriptProperties();
   if (props.getProperty('lastEmailedDate') === maxDate) return;
 
   MailApp.sendEmail({
     to: RECIPIENTS,
-    subject: 'Farmley OEE — App Adoption (' + maxDate + ')',
-    htmlBody: buildAdoptionEmailHtml(maxDate, todays),
+    subject: 'Farmley OEE — Adoption (Day ' + maxDate + ' / Night ' + prevDate + ')',
+    htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows),
   });
   props.setProperty('lastEmailedDate', maxDate);
 }
 
-function buildAdoptionEmailHtml(date, rows) {
+function renderAdoptionTable(title, rows) {
   var th = 'style="border:1px solid #ccc;padding:6px;background:#16a34a;color:#fff;text-align:left"';
   var td = 'style="border:1px solid #ccc;padding:6px"';
-  var html = '<div style="font-family:Arial,sans-serif">'
-    + '<h2 style="color:#15803d">Farmley OEE — App Adoption</h2>'
-    + '<p>Adoption summary for <b>' + date + '</b> (Roasting + Packing lines).</p>'
-    + '<table style="border-collapse:collapse;font-size:14px">'
-    + '<tr><th ' + th + '>Plant</th><th ' + th + '>Created By</th><th ' + th + '>Shift</th>'
+  var html = '<h3 style="margin:16px 0 6px;color:#15803d">' + title + '</h3>';
+  if (!rows.length) return html + '<p style="color:#64748b">No data.</p>';
+  html += '<table style="border-collapse:collapse;font-size:14px">'
+    + '<tr><th ' + th + '>Plant</th><th ' + th + '>Created By</th>'
     + '<th ' + th + '>Roasting</th><th ' + th + '>Packing</th>'
     + '<th ' + th + '>Overall %</th><th ' + th + '>Status</th></tr>';
   rows.forEach(function (r) {
@@ -334,17 +345,22 @@ function buildAdoptionEmailHtml(date, rows) {
     html += '<tr>'
       + '<td ' + td + '>' + r.plant + '</td>'
       + '<td ' + td + '>' + r.createdBy + '</td>'
-      + '<td ' + td + '>' + r.shift + '</td>'
       + '<td ' + td + '>' + r.roasting + '</td>'
       + '<td ' + td + '>' + r.packing + '</td>'
       + '<td ' + td + '>' + r.pct + '%</td>'
       + '<td style="border:1px solid #ccc;padding:6px;background:' + bg + ';color:' + fc + '">' + r.status + '</td>'
       + '</tr>';
   });
-  html += '</table>'
+  return html + '</table>';
+}
+
+function buildAdoptionEmailHtml(dayDate, dayRows, nightDate, nightRows) {
+  return '<div style="font-family:Arial,sans-serif">'
+    + '<h2 style="color:#15803d">Farmley OEE — App Adoption</h2>'
+    + renderAdoptionTable('Day shift — ' + dayDate, dayRows)
+    + renderAdoptionTable('Night shift — ' + nightDate, nightRows)
     + '<p style="color:#64748b;font-size:12px">Red = partially filled · Dark red = not filled · Green = complete. '
-    + 'Auto-generated from Supabase.</p></div>';
-  return html;
+    + 'Roasting + Packing lines only. Auto-generated from Supabase.</p></div>';
 }
 
 function installTrigger() {
