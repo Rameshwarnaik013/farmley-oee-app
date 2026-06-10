@@ -53,6 +53,10 @@ var C_COMPLETE = '#C6EFCE';
 var C_PARTIAL  = '#FF4D4D';
 var C_NONE     = '#C00000';
 
+// Adoption settings
+var EXCLUDE_EMAILS = ['jatoth.r@farmley.com']; // entries by these users are ignored in adoption
+var SHIFTS = ['Day', 'Night']; // every plant/day shows both shift rows
+
 function classifyOEE(oee) {
   var v = Number(oee);
   if (!isFinite(v)) return '';
@@ -89,6 +93,7 @@ function fetchUserMap() {
   sbGet('profiles?select=id,email,full_name,role').forEach(function (p) {
     map[p.id] = {
       label: p.full_name ? (p.full_name + ' (' + p.email + ')') : p.email,
+      email: p.email,
       role: p.role,
     };
   });
@@ -202,22 +207,30 @@ function buildAdoption(records, machines, userMap) {
     else if (line.indexOf('packing') !== -1) totalPack[plant] = (totalPack[plant] || 0) + 1;
   });
 
-  var filledRoast = {}, filledPack = {}, creators = {}, shifts = {}, dateSet = {};
+  var excluded = {};
+  Object.keys(userMap).forEach(function (id) {
+    if (userMap[id].email && EXCLUDE_EMAILS.indexOf(userMap[id].email) !== -1) excluded[id] = 1;
+  });
+
+  // Keyed by date|plant|shift (shift = Day/Night).
+  var filledRoast = {}, filledPack = {}, creators = {}, dateSet = {};
   records.forEach(function (r) {
+    dateSet[r.record_date] = 1;            // date appears even if only excluded users entered
+    if (excluded[r.created_by]) return;     // ignore excluded users' entries
     var plant = r.plants ? r.plants.name : '';
     var line = (r.lines ? r.lines.name : '').toLowerCase();
-    var key = r.record_date + '|' + plant;
-    dateSet[r.record_date] = 1;
+    var sh = (r.shift || '').toLowerCase();
+    var shift = sh === 'night' ? 'Night' : (sh === 'day' ? 'Day' : null);
+    if (!shift) return;                     // only Day/Night entries count
     var isR = line.indexOf('roasting') !== -1;
     var isP = line.indexOf('packing') !== -1;
     if (!isR && !isP) return;
+    var key = r.record_date + '|' + plant + '|' + shift;
     if (isR) { filledRoast[key] = filledRoast[key] || {}; if (r.machines) filledRoast[key][r.machines.name] = 1; }
     if (isP) { filledPack[key]  = filledPack[key]  || {}; if (r.machines) filledPack[key][r.machines.name]  = 1; }
     creators[key] = creators[key] || {};
     var u = userMap[r.created_by];
     creators[key][u ? u.label : (r.created_by || '')] = 1;
-    shifts[key] = shifts[key] || {};
-    if (r.shift) shifts[key][r.shift] = 1;
   });
 
   var plantsWith = {};
@@ -233,19 +246,21 @@ function buildAdoption(records, machines, userMap) {
       var tR = totalRoast[plant] || 0, tP = totalPack[plant] || 0;
       var totalAll = tR + tP;
       if (totalAll === 0) return;
-      var key = date + '|' + plant;
-      var fR = filledRoast[key] ? Object.keys(filledRoast[key]).length : 0;
-      var fP = filledPack[key] ? Object.keys(filledPack[key]).length : 0;
-      var filledAll = fR + fP;
-      var pct = Math.round((filledAll / totalAll) * 1000) / 10;
-      var status = filledAll === 0 ? 'Not Filled'
-                 : (filledAll < totalAll ? 'Partial' : 'Complete');
-      out.push({
-        date: date, plant: plant,
-        createdBy: creators[key] ? Object.keys(creators[key]).sort().join(', ') : '—',
-        shift: shifts[key] ? Object.keys(shifts[key]).sort().join(', ') : '—',
-        roasting: fR + '/' + tR, packing: fP + '/' + tP,
-        pct: pct, status: status,
+      SHIFTS.forEach(function (shift) {       // always emit both Day and Night rows
+        var key = date + '|' + plant + '|' + shift;
+        var fR = filledRoast[key] ? Object.keys(filledRoast[key]).length : 0;
+        var fP = filledPack[key] ? Object.keys(filledPack[key]).length : 0;
+        var filledAll = fR + fP;
+        var pct = Math.round((filledAll / totalAll) * 1000) / 10;
+        var status = filledAll === 0 ? 'Not Filled'
+                   : (filledAll < totalAll ? 'Partial' : 'Complete');
+        out.push({
+          date: date, plant: plant,
+          createdBy: creators[key] ? Object.keys(creators[key]).sort().join(', ') : '—',
+          shift: shift,
+          roasting: fR + '/' + tR, packing: fP + '/' + tP,
+          pct: pct, status: status,
+        });
       });
     });
   });
