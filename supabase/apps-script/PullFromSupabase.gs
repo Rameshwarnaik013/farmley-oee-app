@@ -35,6 +35,8 @@ var RECIPIENTS = [
   'anand.v@farmley.com',
 ].join(',');
 
+var TEST_EMAIL = 'jatoth.r@farmley.com'; // delivery-test recipient
+
 var HEADERS = [
   'ID', 'Date', 'Plant', 'Line', 'Machine', 'Shift', 'Units',
   'Planned Time (min)', 'Downtime (min) [Breakdown]', 'No. of Cycles',
@@ -70,6 +72,8 @@ function onOpen() {
     .createMenu('Farmley OEE')
     .addItem('Sync now', 'syncNow')
     .addItem('Email adoption now', 'emailLatestAdoption')
+    .addItem('Resend adoption (ignore guard)', 'forceSendAdoption')
+    .addItem('Send test email', 'testEmail')
     .addSeparator()
     .addItem('Install auto-sync (5 min)', 'installTrigger')
     .addItem('Install daily adoption email', 'installEmailTrigger')
@@ -357,4 +361,21 @@ function installEmailTrigger() {
   });
   ScriptApp.newTrigger('emailLatestAdoption').timeBased().atHour(EMAIL_HOUR).everyDays(1).create();
   SpreadsheetApp.getActiveSpreadsheet().toast('Daily adoption email enabled (' + EMAIL_HOUR + ':00).');
+}
+
+/* --------------------------- Email diagnostics --------------------------- */
+
+/** Plain delivery test -> TEST_EMAIL. Confirms Gmail send works + grants scope. */
+function testEmail() {
+  MailApp.sendEmail({
+    to: TEST_EMAIL,
+    subject: 'Farmley OEE — test email',
+    htmlBody: 'If you can read this, email delivery works.<br>Sent: ' + new Date(),
+  });
+}
+
+/** Resend the latest date's adoption now, bypassing the "already sent" guard. */
+function forceSendAdoption() {
+  PropertiesService.getScriptProperties().deleteProperty('lastEmailedDate');
+  emailLatestAdoption();
 }
