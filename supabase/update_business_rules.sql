@@ -30,7 +30,7 @@ with p as (select id, name from public.plants),
        values
          -- Indore · Packing Line
          ('Indore','Packing Line','Conti Mix',                  6500,  'Pcs'),
-         ('Indore','Packing Line','FlowWrap',                   113499,'Pcs'),
+         ('Indore','Packing Line','FlowWrap',                   75600, 'Pcs'),
          ('Indore','Packing Line','Jar Sealing',                2500,  'Pcs'),
          ('Indore','Packing Line','Jar Sealing - WAD Machine',  2500,  'Pcs'),
          ('Indore','Packing Line','LD Pack of 2',               2500,  'Pcs'),
@@ -39,8 +39,8 @@ with p as (select id, name from public.plants),
          ('Indore','Packing Line','Perfect - FFS',              32400, 'Pcs'),
          ('Indore','Packing Line','Table',                      2500,  'Pcs'),
          ('Indore','Packing Line','Table - Airlines',           18000, 'Pcs'),
-         ('Indore','Packing Line','PFS1',                       21600, 'Pcs'),
-         ('Indore','Packing Line','PFS2',                       21600, 'Pcs'),
+         ('Indore','Packing Line','PFS1',                       12000, 'Pcs'),
+         ('Indore','Packing Line','PFS2',                       12000, 'Pcs'),
          ('Indore','Packing Line','Contimix PFS',               15660, 'Pcs'),
          ('Indore','Packing Line','Contimix FFS',               6480,  'Pcs'),
          ('Indore','Packing Line','Roboarm Airlines',           27000, 'Pcs'),
@@ -75,8 +75,8 @@ with p as (select id, name from public.plants),
          ('Purnia','Packing Line','FFS 1 (RnF FFS)',            21600, 'Pcs'),
          ('Purnia','Packing Line','FFS 2 (Prasadam FFS)',       12480, 'Pcs'),
          -- Purnia (Purnea) · Roasting Line
-         ('Purnia','Roasting Line','Roasting and Flavouring Machine (Old)',          720,  'Kgs'),
-         ('Purnia','Roasting Line','Roasting and Flavouring Machine-Fabcon (New)',   2000, 'Kgs')
+         ('Purnia','Roasting Line','Roasting and Flavouring Machine (Old)',          810,  'Kgs'),
+         ('Purnia','Roasting Line','Roasting and Flavouring Machine-Fabcon (New)',   2250, 'Kgs')
      )
 insert into public.machines (plant_id, line_id, name, target_output, units, is_active)
 select p.id, l.id, d.machine_name, d.target, d.units, true

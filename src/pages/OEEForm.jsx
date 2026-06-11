@@ -62,6 +62,7 @@ export default function OEEForm() {
         target_output: '', // auto-filled from machine
         good_qty: '',
         number_of_cycles: '',
+        number_of_tables: '',
       })
     }
     load()
@@ -71,9 +72,20 @@ export default function OEEForm() {
     () => lines.find((l) => l.id === form?.line_id) || null,
     [lines, form?.line_id],
   )
+  const selectedMachine = useMemo(
+    () => machines.find((m) => m.id === form?.machine_id) || null,
+    [machines, form?.machine_id],
+  )
   const isRoasting = (selectedLine?.name || '').toLowerCase().includes('roasting')
   const isPacking = (selectedLine?.name || '').toLowerCase().includes('packing')
   const unit = unitForLine(selectedLine?.name)
+
+  // Special case: Indore + Packing Line + "Table" -> Target = 2500 x #tables.
+  const TABLE_RATE = 2500
+  const isIndoreTable =
+    (plant?.name || '') === 'Indore' &&
+    isPacking &&
+    (selectedMachine?.name || '') === 'Table'
 
   const lineMachines = useMemo(
     () => machines.filter((m) => m.line_id === form?.line_id),
@@ -89,17 +101,31 @@ export default function OEEForm() {
 
   const onLineChange = (e) => {
     const line_id = e.target.value
-    setForm((f) => ({ ...f, line_id, machine_id: '', target_output: '' }))
+    setForm((f) => ({ ...f, line_id, machine_id: '', target_output: '', number_of_tables: '' }))
   }
 
   // Selecting a machine auto-fills its Target Output (Per Shift Production).
+  // For Indore "Table", target is driven by Number of Tables instead.
   const onMachineChange = (e) => {
     const machine_id = e.target.value
     const m = machines.find((x) => x.id === machine_id)
+    const indoreTable =
+      (plant?.name || '') === 'Indore' && isPacking && (m?.name || '') === 'Table'
     setForm((f) => ({
       ...f,
       machine_id,
-      target_output: m?.target_output ?? '',
+      number_of_tables: '',
+      target_output: indoreTable ? '' : (m?.target_output ?? ''),
+    }))
+  }
+
+  // Number of Tables -> Target Output = 2500 x tables (Indore Table only).
+  const onTablesChange = (e) => {
+    const value = e.target.value
+    setForm((f) => ({
+      ...f,
+      number_of_tables: value,
+      target_output: value === '' ? '' : TABLE_RATE * (Number(value) || 0),
     }))
   }
 
@@ -120,6 +146,8 @@ export default function OEEForm() {
       return setError('Good Qty is required.')
     if (isRoasting && form.number_of_cycles === '')
       return setError('Number of Cycles is required for Roasting Line.')
+    if (isIndoreTable && (form.number_of_tables === '' || Number(form.number_of_tables) <= 0))
+      return setError('Number of Tables is required for Indore Table (must be > 0).')
 
     setBusy(true)
     const payload = {
@@ -265,6 +293,22 @@ export default function OEEForm() {
             </div>
           )}
 
+          {isIndoreTable && (
+            <div>
+              <label>Number of Tables *</label>
+              <input
+                type="number" min="1" step="1"
+                value={form.number_of_tables}
+                onChange={onTablesChange}
+                placeholder="e.g. 3"
+                required
+              />
+              <small style={{ color: 'var(--muted)' }}>
+                Target = {TABLE_RATE.toLocaleString()} × tables
+              </small>
+            </div>
+          )}
+
           <div>
             <label>{outLabel('Actual Output')} *</label>
             <input
@@ -285,7 +329,11 @@ export default function OEEForm() {
               placeholder={form.machine_id ? '' : 'Select a machine'}
               style={{ background: 'var(--bg)' }}
             />
-            <small style={{ color: 'var(--muted)' }}>From machine’s Per Shift Production</small>
+            <small style={{ color: 'var(--muted)' }}>
+              {isIndoreTable
+                ? `${TABLE_RATE.toLocaleString()} × number of tables`
+                : 'From machine’s Per Shift Production'}
+            </small>
           </div>
 
           <div>
