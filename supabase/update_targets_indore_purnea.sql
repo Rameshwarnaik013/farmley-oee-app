@@ -9,7 +9,7 @@ from (values
   ('Indore', 'Packing Line',  'FlowWrap',                                    75600),
   ('Indore', 'Packing Line',  'PFS1',                                        12000),
   ('Indore', 'Packing Line',  'PFS2',                                        12000),
-  ('Indore', 'Packing Line',  'Jar Sealing - WAD Machine',                   2500),
+  ('Indore', 'Packing Line',  'Jar Sealing - WAD Machine',                   3000),
   ('Purnia', 'Roasting Line', 'Roasting and Flavouring Machine (Old)',       810),
   ('Purnia', 'Roasting Line', 'Roasting and Flavouring Machine-Fabcon (New)', 2250)
 ) as v(plant, line, machine, target)
