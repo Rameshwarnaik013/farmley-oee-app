@@ -80,8 +80,8 @@ export default function OEEForm() {
   const isPacking = (selectedLine?.name || '').toLowerCase().includes('packing')
   const unit = unitForLine(selectedLine?.name)
 
-  // Special case: Indore + Packing Line + "Table" -> Target = 2500 x #tables.
-  const TABLE_RATE = 2500
+  // Special case: Indore + Packing Line + "Table" -> Target = 3000 x #tables.
+  const TABLE_RATE = 3000
   const isIndoreTable =
     (plant?.name || '') === 'Indore' &&
     isPacking &&

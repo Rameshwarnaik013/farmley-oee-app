@@ -11,7 +11,8 @@ from (values
   ('Indore', 'Packing Line',  'PFS2',                                        12000),
   ('Indore', 'Packing Line',  'Jar Sealing - WAD Machine',                   3000),
   ('Purnia', 'Roasting Line', 'Roasting and Flavouring Machine (Old)',       810),
-  ('Purnia', 'Roasting Line', 'Roasting and Flavouring Machine-Fabcon (New)', 2250)
+  ('Purnia', 'Roasting Line', 'Roasting and Flavouring Machine-Fabcon (New)', 2250),
+  ('Indore', 'Packing Line',  'Table',                                       3000)
 ) as v(plant, line, machine, target)
 join public.plants p on p.name = v.plant
 join public.lines  l on l.name = v.line

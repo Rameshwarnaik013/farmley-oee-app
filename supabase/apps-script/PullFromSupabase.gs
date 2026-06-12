@@ -1,16 +1,14 @@
 /**
  * Farmley OEE — Pull data from Supabase into Google Sheets
  * ---------------------------------------------------------
- * Builds two tabs from Supabase (service_role key, bypasses RLS):
- *   "OEE Records"  — full mirror of oee_records, refreshed each sync.
- *   "App Adoption" — per Date+Plant adoption for Roasting + Packing lines.
- * Also emails the latest date's adoption to the recipients once daily.
+ * Builds tabs: "OEE Records", "App Adoption", "OEE % by Line".
+ * Emails latest-day adoption + OEE-by-line to recipients once daily.
  *
  * SETUP
  * 1. File -> Project Settings -> Time zone = Asia/Kolkata (for IST email time).
  * 2. Set SUPABASE_URL + SERVICE_KEY (Settings -> API -> service_role).
  * 3. Run "syncNow" (approve prompt). Run "installTrigger" (5-min sync) and
- *    "installEmailTrigger" (daily adoption email).
+ *    "installEmailTrigger" (daily email).
  *
  * SECURITY: service_role has full DB access. Keep this script private.
  */
@@ -22,7 +20,8 @@ var SHEET_NAME = 'OEE Records';
 var ADOPTION_SHEET = 'App Adoption';
 var PAGE_SIZE  = 1000;
 
-var EMAIL_HOUR = 20; // 8 PM project time (set project TZ to Asia/Kolkata)
+// Daily adoption email
+var EMAIL_HOUR = 20; // 8 PM (project time zone — set to Asia/Kolkata)
 var RECIPIENTS = [
   'saurabh.u@farmley.com',
   'ravi.ku@farmley.com',
@@ -47,18 +46,26 @@ var HEADERS = [
 
 var ADOPTION_HEADERS = [
   'Date', 'Plant', 'Created By', 'Shift',
-  'Roasting (Filled/Total)', 'Packing (Filled/Total)',
+  'Roasting (Filled/Total)', 'Packing (Filled/Total)', 'Mixing (Filled/Total)',
   'Overall Adoption %', 'Status',
 ];
 
-var C_COMPLETE = '#C6EFCE';
-var C_PARTIAL  = '#FF4D4D';
-var C_NONE     = '#C00000';
+var OEE_LINE_SHEET = 'OEE % by Line';
+var OEE_LINE_HEADERS = ['Date', 'Plant', 'Line', 'Shift', 'OEE %'];
+
+// Plants where Mixing is NOT counted toward Overall Adoption %.
+var MIXING_EXCLUDED_PLANTS = ['Purnia'];
+
+// Status colours
+var C_COMPLETE = '#C6EFCE'; // green
+var C_PARTIAL  = '#FF4D4D'; // red
+var C_NONE     = '#C00000'; // dark red
 
 // Adoption settings
 var EXCLUDE_EMAILS = ['jatoth.r@farmley.com']; // entries by these users are ignored in adoption
 var SHIFTS = ['Day', 'Night']; // every plant/day shows both shift rows
 
+/** OEE % -> status. >85 Excellent, 70-85 Acceptable, <70 Critical. */
 function classifyOEE(oee) {
   var v = Number(oee);
   if (!isFinite(v)) return '';
@@ -80,6 +87,8 @@ function onOpen() {
     .addToUi();
 }
 
+/* ----------------------------- Supabase fetch ---------------------------- */
+
 function sbGet(path) {
   var resp = UrlFetchApp.fetch(SUPABASE_URL + '/rest/v1/' + path, {
     method: 'get',
@@ -92,6 +101,7 @@ function sbGet(path) {
   return JSON.parse(resp.getContentText());
 }
 
+/** id -> { label: "Name (email)", role } */
 function fetchUserMap() {
   var map = {};
   sbGet('profiles?select=id,email,full_name,role').forEach(function (p) {
@@ -104,6 +114,7 @@ function fetchUserMap() {
   return map;
 }
 
+/** user_id -> [plant names assigned] */
 function fetchUserPlantsMap() {
   var map = {};
   sbGet('user_plants?select=user_id,plants(name)').forEach(function (r) {
@@ -113,6 +124,7 @@ function fetchUserPlantsMap() {
   return map;
 }
 
+/** active machines with plant + line names (for adoption totals). */
 function fetchMachines() {
   return sbGet('machines?select=id,name,is_active,plants(name),lines(name)&is_active=eq.true');
 }
@@ -149,6 +161,7 @@ function fetchAllRecords() {
         'Range-Unit': 'items',
       },
     });
+
     var code = resp.getResponseCode();
     if (code !== 200 && code !== 206) {
       throw new Error('Supabase error ' + code + ': ' + resp.getContentText());
@@ -160,6 +173,8 @@ function fetchAllRecords() {
   }
   return all;
 }
+
+/* ----------------------------- OEE Records tab --------------------------- */
 
 function syncNow() {
   if (SERVICE_KEY === 'PASTE_YOUR_SERVICE_ROLE_KEY_HERE') {
@@ -178,15 +193,23 @@ function syncNow() {
   records.forEach(function (r) {
     var u = userMap[r.created_by];
     rows.push([
-      r.id, r.record_date,
+      r.id,
+      r.record_date,
       r.plants ? r.plants.name : '',
       r.lines ? r.lines.name : '',
       r.machines ? r.machines.name : '',
-      r.shift || '', r.units || '',
-      r.planned_time_minutes, r.downtime_minutes,
+      r.shift || '',
+      r.units || '',
+      r.planned_time_minutes,
+      r.downtime_minutes,
       (r.number_of_cycles === null || r.number_of_cycles === undefined) ? '' : r.number_of_cycles,
-      r.actual_output, r.target_output, r.good_qty,
-      r.availability_pct, r.performance_pct, r.quality_pct, r.oee_pct,
+      r.actual_output,
+      r.target_output,
+      r.good_qty,
+      r.availability_pct,
+      r.performance_pct,
+      r.quality_pct,
+      r.oee_pct,
       classifyOEE(r.oee_pct),
       u ? u.label : (r.created_by || ''),
       assignedPlantsFor(r.created_by, userMap, userPlantsMap),
@@ -199,16 +222,28 @@ function syncNow() {
   sheet.setFrozenRows(1);
   sheet.getRange(1, HEADERS.length + 2).setValue('Last synced: ' + new Date());
 
+  // Refresh adoption + OEE-by-line tabs too.
   writeAdoptionSheet(buildAdoption(records, machines, userMap));
+  writeOeeByLineSheet(buildOeeByLine(records, userMap));
 }
 
+/* ------------------------------ App Adoption ----------------------------- */
+
+/**
+ * One row per Date + Plant. Only Roasting + Packing lines count.
+ *   Roasting adoption = roasting machines filled / total roasting machines
+ *   Packing adoption  = packing machines filled  / total packing machines
+ *   Overall           = (roasting+packing filled) / (total roasting+packing)
+ * A plant+date with no entries shows 0/total -> Not Filled (dark red).
+ */
 function buildAdoption(records, machines, userMap, extraDates) {
-  var totalRoast = {}, totalPack = {};
+  var totalRoast = {}, totalPack = {}, totalMix = {};
   machines.forEach(function (m) {
     var plant = m.plants ? m.plants.name : '';
     var line = (m.lines ? m.lines.name : '').toLowerCase();
     if (line.indexOf('roasting') !== -1) totalRoast[plant] = (totalRoast[plant] || 0) + 1;
     else if (line.indexOf('packing') !== -1) totalPack[plant] = (totalPack[plant] || 0) + 1;
+    else if (line.indexOf('mixing') !== -1) totalMix[plant] = (totalMix[plant] || 0) + 1;
   });
 
   var excluded = {};
@@ -217,7 +252,7 @@ function buildAdoption(records, machines, userMap, extraDates) {
   });
 
   // Keyed by date|plant|shift (shift = Day/Night).
-  var filledRoast = {}, filledPack = {}, creators = {}, dateSet = {};
+  var filledRoast = {}, filledPack = {}, filledMix = {}, creators = {}, dateSet = {};
   records.forEach(function (r) {
     dateSet[r.record_date] = 1;            // date appears even if only excluded users entered
     if (excluded[r.created_by]) return;     // ignore excluded users' entries
@@ -228,10 +263,12 @@ function buildAdoption(records, machines, userMap, extraDates) {
     if (!shift) return;                     // only Day/Night entries count
     var isR = line.indexOf('roasting') !== -1;
     var isP = line.indexOf('packing') !== -1;
-    if (!isR && !isP) return;
+    var isM = line.indexOf('mixing') !== -1;
+    if (!isR && !isP && !isM) return;
     var key = r.record_date + '|' + plant + '|' + shift;
     if (isR) { filledRoast[key] = filledRoast[key] || {}; if (r.machines) filledRoast[key][r.machines.name] = 1; }
     if (isP) { filledPack[key]  = filledPack[key]  || {}; if (r.machines) filledPack[key][r.machines.name]  = 1; }
+    if (isM) { filledMix[key]   = filledMix[key]   || {}; if (r.machines) filledMix[key][r.machines.name]   = 1; }
     creators[key] = creators[key] || {};
     var u = userMap[r.created_by];
     creators[key][u ? u.label : (r.created_by || '')] = 1;
@@ -240,6 +277,7 @@ function buildAdoption(records, machines, userMap, extraDates) {
   var plantsWith = {};
   Object.keys(totalRoast).forEach(function (p) { plantsWith[p] = 1; });
   Object.keys(totalPack).forEach(function (p) { plantsWith[p] = 1; });
+  Object.keys(totalMix).forEach(function (p) { plantsWith[p] = 1; });
 
   (extraDates || []).forEach(function (d) { dateSet[d] = 1; }); // ensure email dates appear
   var dates = Object.keys(dateSet).sort();
@@ -248,22 +286,26 @@ function buildAdoption(records, machines, userMap, extraDates) {
   var out = [];
   dates.forEach(function (date) {
     plants.forEach(function (plant) {
-      var tR = totalRoast[plant] || 0, tP = totalPack[plant] || 0;
-      var totalAll = tR + tP;
-      if (totalAll === 0) return;
+      var tR = totalRoast[plant] || 0, tP = totalPack[plant] || 0, tM = totalMix[plant] || 0;
+      if (tR + tP + tM === 0) return;
+      var includeMix = MIXING_EXCLUDED_PLANTS.indexOf(plant) === -1; // Purnia excludes Mixing
+      var totalAll = tR + tP + (includeMix ? tM : 0);
       SHIFTS.forEach(function (shift) {       // always emit both Day and Night rows
         var key = date + '|' + plant + '|' + shift;
         var fR = filledRoast[key] ? Object.keys(filledRoast[key]).length : 0;
         var fP = filledPack[key] ? Object.keys(filledPack[key]).length : 0;
-        var filledAll = fR + fP;
-        var pct = Math.round((filledAll / totalAll) * 1000) / 10;
+        var fM = filledMix[key] ? Object.keys(filledMix[key]).length : 0;
+        var filledAll = fR + fP + (includeMix ? fM : 0);
+        var pct = totalAll > 0 ? Math.min(100, Math.round((filledAll / totalAll) * 1000) / 10) : 0;
         var status = filledAll === 0 ? 'Not Filled'
                    : (filledAll < totalAll ? 'Partial' : 'Complete');
         out.push({
           date: date, plant: plant,
           createdBy: creators[key] ? Object.keys(creators[key]).sort().join(', ') : '—',
           shift: shift,
-          roasting: fR + '/' + tR, packing: fP + '/' + tP,
+          roasting: fR + '/' + tR,
+          packing: fP + '/' + tP,
+          mixing: fM + '/' + tM,
           pct: pct, status: status,
         });
       });
@@ -272,10 +314,51 @@ function buildAdoption(records, machines, userMap, extraDates) {
   return out;
 }
 
+/**
+ * OEE % by Line: one row per Date+Plant+Line+Shift = average of machine OEE%.
+ * Excludes EXCLUDE_EMAILS. Only groups that actually have entries are returned.
+ */
+function buildOeeByLine(records, userMap) {
+  var excluded = {};
+  Object.keys(userMap).forEach(function (id) {
+    if (userMap[id].email && EXCLUDE_EMAILS.indexOf(userMap[id].email) !== -1) excluded[id] = 1;
+  });
+
+  var groups = {};
+  records.forEach(function (r) {
+    if (excluded[r.created_by]) return;
+    var sh = (r.shift || '').toLowerCase();
+    var shift = sh === 'night' ? 'Night' : (sh === 'day' ? 'Day' : null);
+    if (!shift) return;
+    var line = r.lines ? r.lines.name : '';
+    if (!line) return;
+    var oee = Number(r.oee_pct);
+    if (!isFinite(oee)) return;
+    var plant = r.plants ? r.plants.name : '';
+    var key = r.record_date + '|' + plant + '|' + line + '|' + shift;
+    if (!groups[key]) groups[key] = { date: r.record_date, plant: plant, line: line, shift: shift, sum: 0, n: 0 };
+    groups[key].sum += oee;
+    groups[key].n += 1;
+  });
+
+  var out = Object.keys(groups).map(function (k) {
+    var g = groups[k];
+    return { date: g.date, plant: g.plant, line: g.line, shift: g.shift,
+             oee: Math.round((g.sum / g.n) * 100) / 100 };
+  });
+  out.sort(function (a, b) {
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1; // newest first
+    if (a.plant !== b.plant) return a.plant < b.plant ? -1 : 1;
+    if (a.line !== b.line) return a.line < b.line ? -1 : 1;
+    return a.shift < b.shift ? -1 : 1;
+  });
+  return out;
+}
+
 function statusColor(status) {
   if (status === 'Complete') return C_COMPLETE;
   if (status === 'Partial') return C_PARTIAL;
-  return C_NONE;
+  return C_NONE; // Not Filled
 }
 
 function writeAdoptionSheet(rows) {
@@ -285,19 +368,36 @@ function writeAdoptionSheet(rows) {
 
   var values = [ADOPTION_HEADERS];
   rows.forEach(function (r) {
-    values.push([r.date, r.plant, r.createdBy, r.shift, r.roasting, r.packing, r.pct, r.status]);
+    values.push([r.date, r.plant, r.createdBy, r.shift, r.roasting, r.packing, r.mixing, r.pct, r.status]);
   });
   sheet.getRange(1, 1, values.length, ADOPTION_HEADERS.length).setValues(values);
   sheet.getRange(1, 1, 1, ADOPTION_HEADERS.length).setFontWeight('bold');
   sheet.setFrozenRows(1);
 
+  // Colour the Overall % + Status cells per row (cols 8-9).
   for (var i = 0; i < rows.length; i++) {
     var bg = statusColor(rows[i].status);
     var font = (rows[i].status === 'Not Filled') ? '#FFFFFF' : '#000000';
-    sheet.getRange(i + 2, 7, 1, 2).setBackground(bg).setFontColor(font);
+    sheet.getRange(i + 2, 8, 1, 2).setBackground(bg).setFontColor(font);
   }
 }
 
+function writeOeeByLineSheet(rows) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(OEE_LINE_SHEET) || ss.insertSheet(OEE_LINE_SHEET);
+  sheet.clear();
+  var values = [OEE_LINE_HEADERS];
+  rows.forEach(function (r) {
+    values.push([r.date, r.plant, r.line, r.shift, r.oee]);
+  });
+  sheet.getRange(1, 1, values.length, OEE_LINE_HEADERS.length).setValues(values);
+  sheet.getRange(1, 1, 1, OEE_LINE_HEADERS.length).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+}
+
+/* ------------------------------ Daily email ------------------------------ */
+
+// Shift YYYY-MM-DD by n days (UTC-safe).
 function addDays(dateStr, n) {
   var d = new Date(dateStr + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + n);
@@ -310,20 +410,27 @@ function emailLatestAdoption() {
   var records = fetchAllRecords();
   if (!records.length) return;
 
+  // Latest day = max record date; previous day = latest - 1.
   var maxDate = records.reduce(function (a, r) {
     return r.record_date > a ? r.record_date : a;
   }, records[0].record_date);
   var prevDate = addDays(maxDate, -1);
 
+  // Force both dates to exist so "Not Filled" rows show even with no entries.
   var rows = buildAdoption(records, machines, userMap, [maxDate, prevDate]);
   var dayRows = rows.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
   var nightRows = rows.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
 
+  // OEE % by line for the same Day(latest)/Night(prev) sections.
+  var oee = buildOeeByLine(records, userMap);
+  var dayOee = oee.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
+  var nightOee = oee.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
+
   // Always send (fixed daily trigger). Keep ONE trigger to avoid duplicates.
   MailApp.sendEmail({
     to: RECIPIENTS,
-    subject: 'Farmley OEE — Adoption (Day ' + maxDate + ' / Night ' + prevDate + ')',
-    htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows),
+    subject: 'Farmley OEE — Adoption + OEE (Day ' + maxDate + ' / Night ' + prevDate + ')',
+    htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows, dayOee, nightOee),
   });
   PropertiesService.getScriptProperties().setProperty('lastEmailedDate', maxDate);
 }
@@ -335,7 +442,7 @@ function renderAdoptionTable(title, rows) {
   if (!rows.length) return html + '<p style="color:#64748b">No data.</p>';
   html += '<table style="border-collapse:collapse;font-size:14px">'
     + '<tr><th ' + th + '>Plant</th><th ' + th + '>Created By</th>'
-    + '<th ' + th + '>Roasting</th><th ' + th + '>Packing</th>'
+    + '<th ' + th + '>Roasting</th><th ' + th + '>Packing</th><th ' + th + '>Mixing</th>'
     + '<th ' + th + '>Overall %</th><th ' + th + '>Status</th></tr>';
   rows.forEach(function (r) {
     var bg = statusColor(r.status);
@@ -345,6 +452,7 @@ function renderAdoptionTable(title, rows) {
       + '<td ' + td + '>' + r.createdBy + '</td>'
       + '<td ' + td + '>' + r.roasting + '</td>'
       + '<td ' + td + '>' + r.packing + '</td>'
+      + '<td ' + td + '>' + r.mixing + '</td>'
       + '<td ' + td + '>' + r.pct + '%</td>'
       + '<td style="border:1px solid #ccc;padding:6px;background:' + bg + ';color:' + fc + '">' + r.status + '</td>'
       + '</tr>';
@@ -352,14 +460,36 @@ function renderAdoptionTable(title, rows) {
   return html + '</table>';
 }
 
-function buildAdoptionEmailHtml(dayDate, dayRows, nightDate, nightRows) {
+function renderOeeTable(title, rows) {
+  var th = 'style="border:1px solid #ccc;padding:6px;background:#f59e0b;color:#fff;text-align:left"';
+  var td = 'style="border:1px solid #ccc;padding:6px"';
+  var html = '<h3 style="margin:16px 0 6px;color:#b45309">' + title + '</h3>';
+  if (!rows.length) return html + '<p style="color:#64748b">No data.</p>';
+  html += '<table style="border-collapse:collapse;font-size:14px">'
+    + '<tr><th ' + th + '>Plant</th><th ' + th + '>Line</th><th ' + th + '>OEE %</th></tr>';
+  rows.forEach(function (r) {
+    html += '<tr>'
+      + '<td ' + td + '>' + r.plant + '</td>'
+      + '<td ' + td + '>' + r.line + '</td>'
+      + '<td ' + td + '>' + r.oee + '%</td>'
+      + '</tr>';
+  });
+  return html + '</table>';
+}
+
+function buildAdoptionEmailHtml(dayDate, dayRows, nightDate, nightRows, dayOee, nightOee) {
   return '<div style="font-family:Arial,sans-serif">'
     + '<h2 style="color:#15803d">Farmley OEE — App Adoption</h2>'
     + renderAdoptionTable('Day shift — ' + dayDate, dayRows)
     + renderAdoptionTable('Night shift — ' + nightDate, nightRows)
-    + '<p style="color:#64748b;font-size:12px">Red = partially filled · Dark red = not filled · Green = complete. '
-    + 'Roasting + Packing lines only. Auto-generated from Supabase.</p></div>';
+    + '<h2 style="color:#b45309;margin-top:22px">OEE % by Line (avg of machines)</h2>'
+    + renderOeeTable('Day shift — ' + dayDate, dayOee || [])
+    + renderOeeTable('Night shift — ' + nightDate, nightOee || [])
+    + '<p style="color:#64748b;font-size:12px">Adoption: Red = partial · Dark red = not filled · Green = complete. '
+    + 'Mixing excluded from Overall % for Purnia. Auto-generated from Supabase.</p></div>';
 }
+
+/* ------------------------------- Triggers -------------------------------- */
 
 function installTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
