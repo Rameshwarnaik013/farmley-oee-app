@@ -477,11 +477,40 @@ function renderOeeTable(title, rows) {
   return html + '</table>';
 }
 
+// Average the per-line OEE rows up to one overall value per plant.
+function plantAvgFromLines(lineRows) {
+  var g = {};
+  (lineRows || []).forEach(function (r) {
+    if (!g[r.plant]) g[r.plant] = { sum: 0, n: 0 };
+    g[r.plant].sum += r.oee;
+    g[r.plant].n += 1;
+  });
+  return Object.keys(g).sort().map(function (p) {
+    return { plant: p, oee: Math.round((g[p].sum / g[p].n) * 100) / 100 };
+  });
+}
+
+function renderPlantOeeTable(title, rows) {
+  var th = 'style="border:1px solid #ccc;padding:6px;background:#0ea5e9;color:#fff;text-align:left"';
+  var td = 'style="border:1px solid #ccc;padding:6px;font-weight:bold"';
+  var html = '<h3 style="margin:16px 0 6px;color:#0369a1">' + title + '</h3>';
+  if (!rows.length) return html + '<p style="color:#64748b">No data.</p>';
+  html += '<table style="border-collapse:collapse;font-size:14px">'
+    + '<tr><th ' + th + '>Plant</th><th ' + th + '>Overall OEE % (avg of lines)</th></tr>';
+  rows.forEach(function (r) {
+    html += '<tr><td ' + td + '>' + r.plant + '</td><td ' + td + '>' + r.oee + '%</td></tr>';
+  });
+  return html + '</table>';
+}
+
 function buildAdoptionEmailHtml(dayDate, dayRows, nightDate, nightRows, dayOee, nightOee) {
   return '<div style="font-family:Arial,sans-serif">'
     + '<h2 style="color:#15803d">Farmley OEE — App Adoption</h2>'
     + renderAdoptionTable('Day shift — ' + dayDate, dayRows)
     + renderAdoptionTable('Night shift — ' + nightDate, nightRows)
+    + '<h2 style="color:#0369a1;margin-top:22px">Overall Plant OEE % (avg of lines)</h2>'
+    + renderPlantOeeTable('Day shift — ' + dayDate, plantAvgFromLines(dayOee))
+    + renderPlantOeeTable('Night shift — ' + nightDate, plantAvgFromLines(nightOee))
     + '<h2 style="color:#b45309;margin-top:22px">OEE % by Line (avg of machines)</h2>'
     + renderOeeTable('Day shift — ' + dayDate, dayOee || [])
     + renderOeeTable('Night shift — ' + nightDate, nightOee || [])
