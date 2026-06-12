@@ -80,6 +80,7 @@ function onOpen() {
     .addItem('Sync now', 'syncNow')
     .addItem('Email adoption now', 'emailLatestAdoption')
     .addItem('Resend adoption (ignore guard)', 'forceSendAdoption')
+    .addItem('Email adoption to me (test)', 'emailAdoptionToSelf')
     .addItem('Send test email', 'testEmail')
     .addSeparator()
     .addItem('Install auto-sync (5 min)', 'installTrigger')
@@ -433,6 +434,33 @@ function emailLatestAdoption() {
     htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows, dayOee, nightOee),
   });
   PropertiesService.getScriptProperties().setProperty('lastEmailedDate', maxDate);
+}
+
+/** Sends the full new-format report to TEST_EMAIL only (no guard, no team). */
+function emailAdoptionToSelf() {
+  var userMap = fetchUserMap();
+  var machines = fetchMachines();
+  var records = fetchAllRecords();
+  if (!records.length) {
+    MailApp.sendEmail({ to: TEST_EMAIL, subject: 'Farmley OEE — test (no records)',
+      htmlBody: 'Ran OK, but Supabase has no OEE records yet.' });
+    return;
+  }
+  var maxDate = records.reduce(function (a, r) {
+    return r.record_date > a ? r.record_date : a;
+  }, records[0].record_date);
+  var prevDate = addDays(maxDate, -1);
+  var rows = buildAdoption(records, machines, userMap, [maxDate, prevDate]);
+  var dayRows = rows.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
+  var nightRows = rows.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
+  var oee = buildOeeByLine(records, userMap);
+  var dayOee = oee.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
+  var nightOee = oee.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
+  MailApp.sendEmail({
+    to: TEST_EMAIL,
+    subject: '[TEST to self] Farmley OEE — Adoption + OEE (Day ' + maxDate + ' / Night ' + prevDate + ')',
+    htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows, dayOee, nightOee),
+  });
 }
 
 function renderAdoptionTable(title, rows) {
