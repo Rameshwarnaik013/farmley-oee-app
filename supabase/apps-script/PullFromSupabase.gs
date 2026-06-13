@@ -405,19 +405,48 @@ function addDays(dateStr, n) {
   return d.toISOString().slice(0, 10);
 }
 
-// Build an .xlsx Blob containing only the "OEE Records" + "OEE % by Line" tabs.
-function buildReportXlsxBlob() {
-  var src = SpreadsheetApp.getActiveSpreadsheet();
-  var wanted = [SHEET_NAME, OEE_LINE_SHEET];
-  var temp = SpreadsheetApp.create('Farmley OEE export ' + new Date().getTime());
-  wanted.forEach(function (name) {
-    var sh = src.getSheetByName(name);
-    if (sh) sh.copyTo(temp).setName(name);
-  });
-  var def = temp.getSheetByName('Sheet1');
-  if (def && temp.getSheets().length > 1) temp.deleteSheet(def);
-  SpreadsheetApp.flush();
+// One OEE Records row (mirrors the HEADERS column order).
+function recordToRow(r, userMap, userPlantsMap) {
+  var u = userMap[r.created_by];
+  return [
+    r.id, r.record_date,
+    r.plants ? r.plants.name : '',
+    r.lines ? r.lines.name : '',
+    r.machines ? r.machines.name : '',
+    r.shift || '', r.units || '',
+    r.planned_time_minutes, r.downtime_minutes,
+    (r.number_of_cycles === null || r.number_of_cycles === undefined) ? '' : r.number_of_cycles,
+    r.actual_output, r.target_output, r.good_qty,
+    r.availability_pct, r.performance_pct, r.quality_pct, r.oee_pct,
+    classifyOEE(r.oee_pct),
+    u ? u.label : (r.created_by || ''),
+    assignedPlantsFor(r.created_by, userMap, userPlantsMap),
+    r.created_at,
+  ];
+}
 
+// Records limited to latest-day Day shift + previous-day Night shift.
+function filterRecordsForReport(records, maxDate, prevDate) {
+  return records.filter(function (r) {
+    var sh = (r.shift || '').toLowerCase();
+    return (r.record_date === maxDate && sh === 'day')
+        || (r.record_date === prevDate && sh === 'night');
+  });
+}
+
+// xlsx of just the supplied (already-filtered) OEE Records + OEE % by Line rows.
+function buildFilteredXlsxBlob(recRows, oeeRows) {
+  var temp = SpreadsheetApp.create('Farmley OEE export ' + new Date().getTime());
+  var s1 = temp.getActiveSheet();
+  s1.setName(SHEET_NAME);
+  var v1 = [HEADERS].concat(recRows);
+  s1.getRange(1, 1, v1.length, HEADERS.length).setValues(v1);
+
+  var s2 = temp.insertSheet(OEE_LINE_SHEET);
+  var v2 = [OEE_LINE_HEADERS].concat(oeeRows);
+  s2.getRange(1, 1, v2.length, OEE_LINE_HEADERS.length).setValues(v2);
+
+  SpreadsheetApp.flush();
   var url = 'https://docs.google.com/spreadsheets/d/' + temp.getId() + '/export?format=xlsx';
   var resp = UrlFetchApp.fetch(url, {
     muteHttpExceptions: true,
@@ -429,8 +458,8 @@ function buildReportXlsxBlob() {
   return blob;
 }
 
-function getReportAttachments() {
-  try { return [buildReportXlsxBlob()]; } catch (e) { return []; }
+function getReportAttachments(recRows, oeeRows) {
+  try { return [buildFilteredXlsxBlob(recRows, oeeRows)]; } catch (e) { return []; }
 }
 
 function emailLatestAdoption() {
@@ -455,12 +484,20 @@ function emailLatestAdoption() {
   var dayOee = oee.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
   var nightOee = oee.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
 
+  // Attachment rows: only latest-day Day + previous-day Night.
+  var userPlantsMap = fetchUserPlantsMap();
+  var recRows = filterRecordsForReport(records, maxDate, prevDate)
+    .map(function (r) { return recordToRow(r, userMap, userPlantsMap); });
+  var oeeRows = dayOee.concat(nightOee).map(function (r) {
+    return [r.date, r.plant, r.line, r.shift, r.oee];
+  });
+
   // Always send (fixed daily trigger). Keep ONE trigger to avoid duplicates.
   MailApp.sendEmail({
     to: RECIPIENTS,
     subject: 'Farmley OEE — Adoption + OEE (Day ' + maxDate + ' / Night ' + prevDate + ')',
     htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows, dayOee, nightOee),
-    attachments: getReportAttachments(),
+    attachments: getReportAttachments(recRows, oeeRows),
   });
   PropertiesService.getScriptProperties().setProperty('lastEmailedDate', maxDate);
 }
@@ -485,11 +522,19 @@ function emailAdoptionToSelf() {
   var oee = buildOeeByLine(records, userMap);
   var dayOee = oee.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
   var nightOee = oee.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
+
+  var userPlantsMap = fetchUserPlantsMap();
+  var recRows = filterRecordsForReport(records, maxDate, prevDate)
+    .map(function (r) { return recordToRow(r, userMap, userPlantsMap); });
+  var oeeRows = dayOee.concat(nightOee).map(function (r) {
+    return [r.date, r.plant, r.line, r.shift, r.oee];
+  });
+
   MailApp.sendEmail({
     to: TEST_EMAIL,
     subject: '[TEST to self] Farmley OEE — Adoption + OEE (Day ' + maxDate + ' / Night ' + prevDate + ')',
     htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows, dayOee, nightOee),
-    attachments: getReportAttachments(),
+    attachments: getReportAttachments(recRows, oeeRows),
   });
 }
 
