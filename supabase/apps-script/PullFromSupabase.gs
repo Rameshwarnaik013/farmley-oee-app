@@ -405,6 +405,34 @@ function addDays(dateStr, n) {
   return d.toISOString().slice(0, 10);
 }
 
+// Build an .xlsx Blob containing only the "OEE Records" + "OEE % by Line" tabs.
+function buildReportXlsxBlob() {
+  var src = SpreadsheetApp.getActiveSpreadsheet();
+  var wanted = [SHEET_NAME, OEE_LINE_SHEET];
+  var temp = SpreadsheetApp.create('Farmley OEE export ' + new Date().getTime());
+  wanted.forEach(function (name) {
+    var sh = src.getSheetByName(name);
+    if (sh) sh.copyTo(temp).setName(name);
+  });
+  var def = temp.getSheetByName('Sheet1');
+  if (def && temp.getSheets().length > 1) temp.deleteSheet(def);
+  SpreadsheetApp.flush();
+
+  var url = 'https://docs.google.com/spreadsheets/d/' + temp.getId() + '/export?format=xlsx';
+  var resp = UrlFetchApp.fetch(url, {
+    muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+  });
+  var blob = resp.getBlob().setName(
+    'Farmley_OEE_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+  DriveApp.getFileById(temp.getId()).setTrashed(true); // clean up temp file
+  return blob;
+}
+
+function getReportAttachments() {
+  try { return [buildReportXlsxBlob()]; } catch (e) { return []; }
+}
+
 function emailLatestAdoption() {
   var userMap = fetchUserMap();
   var machines = fetchMachines();
@@ -432,6 +460,7 @@ function emailLatestAdoption() {
     to: RECIPIENTS,
     subject: 'Farmley OEE — Adoption + OEE (Day ' + maxDate + ' / Night ' + prevDate + ')',
     htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows, dayOee, nightOee),
+    attachments: getReportAttachments(),
   });
   PropertiesService.getScriptProperties().setProperty('lastEmailedDate', maxDate);
 }
@@ -460,6 +489,7 @@ function emailAdoptionToSelf() {
     to: TEST_EMAIL,
     subject: '[TEST to self] Farmley OEE — Adoption + OEE (Day ' + maxDate + ' / Night ' + prevDate + ')',
     htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows, dayOee, nightOee),
+    attachments: getReportAttachments(),
   });
 }
 
