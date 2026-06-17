@@ -43,6 +43,7 @@ with p as (select id, name from public.plants),
          ('Indore', 'Packing Line', 'Pace - FFS'),
          ('Indore', 'Packing Line', 'Perfect - FFS'),
          ('Indore', 'Packing Line', 'PFS'),
+         ('Indore', 'Packing Line', 'PFS3'),
          ('Indore', 'Packing Line', 'Table'),
          ('Indore', 'Packing Line', 'Table - Airlines'),
 
