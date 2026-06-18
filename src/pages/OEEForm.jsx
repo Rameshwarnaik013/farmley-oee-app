@@ -3,6 +3,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/AuthContext.jsx'
 import { calculateOEE, hoursToMinutes, formatPct } from '../lib/oee'
+import { getMasterPpm } from '../lib/ppmMaster'
 
 // Units by line type: Roasting & Mixing in Kgs, Packing in Pieces.
 function unitForLine(lineName) {
@@ -100,7 +101,9 @@ export default function OEEForm() {
   const baseTargetOutput = isIndoreTable
     ? (form?.number_of_tables === '' ? '' : TABLE_RATE * (Number(form?.number_of_tables) || 0))
     : (selectedMachine?.target_output ?? '')
-  const ppm = selectedMachine?.pieces_per_minute ?? ''
+  const dbPpm = toNumber(selectedMachine?.pieces_per_minute)
+  const masterPpm = getMasterPpm(plant?.name, selectedLine?.name, selectedMachine?.name)
+  const ppm = dbPpm > 0 ? dbPpm : masterPpm
   const actualExceedsBaseTarget =
     unit === 'pieces' &&
     form?.actual_output !== '' &&
