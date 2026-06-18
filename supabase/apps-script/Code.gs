@@ -13,7 +13,8 @@ var SHEET_NAME = 'OEE Records';
 
 var HEADERS = [
   'ID', 'Date', 'Plant', 'Line', 'Machine', 'Shift',
-  'Planned Time (min)', 'Downtime (min)', 'Actual Output', 'Target Output',
+  'Planned Time (min)', 'Downtime (min)', 'Operational Hours', 'Pieces Per Minute (PPM)',
+  'Actual Output', 'Target Output',
   'Good Qty', 'Availability %', 'Performance %', 'Quality %', 'OEE %', 'Created At',
 ];
 
@@ -42,6 +43,8 @@ function doPost(e) {
       body.shift,
       body.planned_time_minutes,
       body.downtime_minutes,
+      body.operational_hours,
+      body.pieces_per_minute,
       body.actual_output,
       body.target_output,
       body.good_qty,

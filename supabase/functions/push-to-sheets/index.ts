@@ -59,6 +59,8 @@ Deno.serve(async (req) => {
       shift: rec.shift ?? '',
       planned_time_minutes: rec.planned_time_minutes,
       downtime_minutes: rec.downtime_minutes,
+      operational_hours: rec.operational_hours ?? '',
+      pieces_per_minute: rec.pieces_per_minute ?? '',
       actual_output: rec.actual_output,
       target_output: rec.target_output,
       good_qty: rec.good_qty,

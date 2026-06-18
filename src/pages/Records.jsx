@@ -126,6 +126,8 @@ export default function Records() {
                   <th>Machine</th>
                   <th>Planned (min)</th>
                   <th>Downtime</th>
+                  <th>Op Hours</th>
+                  <th>PPM</th>
                   <th>Actual</th>
                   <th>Target</th>
                   <th>Good</th>
@@ -158,6 +160,8 @@ export default function Records() {
                     <td>{r.machines?.name || '—'}</td>
                     <td>{r.planned_time_minutes}</td>
                     <td>{r.downtime_minutes}</td>
+                    <td>{r.operational_hours ?? '-'}</td>
+                    <td>{r.pieces_per_minute ?? '-'}</td>
                     <td>{r.actual_output}</td>
                     <td>{r.target_output}</td>
                     <td>{r.good_qty}</td>

@@ -23,6 +23,16 @@ function defaultShift(plantName) {
   return istHour >= dayStart && istHour < dayEnd ? 'Day' : 'Night'
 }
 
+const toNumber = (value) => {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+const targetFromOperationalHours = (hours, ppm) => {
+  const target = toNumber(hours) * toNumber(ppm) * 60
+  return Math.round(target * 100) / 100
+}
+
 export default function OEEForm() {
   const { plantId } = useParams()
   const navigate = useNavigate()
@@ -63,6 +73,7 @@ export default function OEEForm() {
         good_qty: '',
         number_of_cycles: '',
         number_of_tables: '',
+        operational_hours: '',
       })
     }
     load()
@@ -86,6 +97,16 @@ export default function OEEForm() {
     (plant?.name || '') === 'Indore' &&
     isPacking &&
     (selectedMachine?.name || '') === 'Table'
+  const baseTargetOutput = isIndoreTable
+    ? (form?.number_of_tables === '' ? '' : TABLE_RATE * (Number(form?.number_of_tables) || 0))
+    : (selectedMachine?.target_output ?? '')
+  const ppm = selectedMachine?.pieces_per_minute ?? ''
+  const actualExceedsBaseTarget =
+    unit === 'pieces' &&
+    form?.actual_output !== '' &&
+    baseTargetOutput !== '' &&
+    toNumber(form?.actual_output) > toNumber(baseTargetOutput)
+  const showOperationalHours = actualExceedsBaseTarget || Boolean(form?.operational_hours)
 
   const lineMachines = useMemo(
     () => machines.filter((m) => m.line_id === form?.line_id),
@@ -99,9 +120,36 @@ export default function OEEForm() {
     setForm((f) => ({ ...f, [key]: value }))
   }
 
+  const onActualOutputChange = (e) => {
+    const value = e.target.value
+    setForm((f) => {
+      const nextActualExceedsTarget =
+        unit === 'pieces' &&
+        value !== '' &&
+        baseTargetOutput !== '' &&
+        toNumber(value) > toNumber(baseTargetOutput)
+
+      return {
+        ...f,
+        actual_output: value,
+        operational_hours: nextActualExceedsTarget ? f.operational_hours : '',
+        target_output: nextActualExceedsTarget
+          ? f.target_output
+          : baseTargetOutput,
+      }
+    })
+  }
+
   const onLineChange = (e) => {
     const line_id = e.target.value
-    setForm((f) => ({ ...f, line_id, machine_id: '', target_output: '', number_of_tables: '' }))
+    setForm((f) => ({
+      ...f,
+      line_id,
+      machine_id: '',
+      target_output: '',
+      number_of_tables: '',
+      operational_hours: '',
+    }))
   }
 
   // Selecting a machine auto-fills its Target Output (Per Shift Production).
@@ -115,6 +163,7 @@ export default function OEEForm() {
       ...f,
       machine_id,
       number_of_tables: '',
+      operational_hours: '',
       target_output: indoreTable ? '' : (m?.target_output ?? ''),
     }))
   }
@@ -126,6 +175,17 @@ export default function OEEForm() {
       ...f,
       number_of_tables: value,
       target_output: value === '' ? '' : TABLE_RATE * (Number(value) || 0),
+      operational_hours: '',
+    }))
+  }
+
+  const onOperationalHoursChange = (e) => {
+    const value = e.target.value
+    setForm((f) => ({
+      ...f,
+      operational_hours: value,
+      target_output:
+        value === '' ? baseTargetOutput : targetFromOperationalHours(value, ppm),
     }))
   }
 
@@ -148,6 +208,10 @@ export default function OEEForm() {
       return setError('Number of Cycles is required for Roasting Line.')
     if (isIndoreTable && (form.number_of_tables === '' || Number(form.number_of_tables) <= 0))
       return setError('Number of Tables is required for Indore Table (must be > 0).')
+    if (actualExceedsBaseTarget && !ppm)
+      return setError('Pieces Per Minute (PPM) is missing for the selected machine.')
+    if (actualExceedsBaseTarget && (form.operational_hours === '' || Number(form.operational_hours) <= 0))
+      return setError('Operational Hours is required when Actual Output is greater than Target Output.')
 
     setBusy(true)
     const payload = {
@@ -159,6 +223,8 @@ export default function OEEForm() {
       shift: form.shift || null,
       units: unit === 'pieces' ? 'Pcs' : 'Kgs',
       number_of_cycles: isRoasting ? Number(form.number_of_cycles) || 0 : null,
+      operational_hours: showOperationalHours ? Number(form.operational_hours) || 0 : null,
+      pieces_per_minute: showOperationalHours ? Number(ppm) || 0 : null,
       planned_time_hours: Number(form.planned_time_hours) || 0,
       downtime_minutes: Number(form.downtime_minutes) || 0,
       actual_output: Number(form.actual_output) || 0,
@@ -314,11 +380,43 @@ export default function OEEForm() {
             <input
               type="number" min="0" step="any"
               value={form.actual_output}
-              onChange={update('actual_output')}
+              onChange={onActualOutputChange}
               placeholder="e.g. 6500"
               required
             />
           </div>
+
+          {showOperationalHours && (
+            <>
+              <div>
+                <label>Operational Hours *</label>
+                <input
+                  type="number" min="0" step="any"
+                  value={form.operational_hours}
+                  onChange={onOperationalHoursChange}
+                  placeholder="e.g. 10"
+                  required={actualExceedsBaseTarget}
+                />
+                <small style={{ color: 'var(--muted)' }}>
+                  Recalculates target output
+                </small>
+              </div>
+
+              <div>
+                <label>Pieces Per Minute (PPM)</label>
+                <input
+                  type="number"
+                  value={ppm}
+                  readOnly
+                  placeholder="Not configured"
+                  style={{ background: 'var(--bg)' }}
+                />
+                <small style={{ color: 'var(--muted)' }}>
+                  From machine master data
+                </small>
+              </div>
+            </>
+          )}
 
           <div>
             <label>{outLabel('Target Output')} (auto)</label>

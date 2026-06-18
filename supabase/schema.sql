@@ -31,6 +31,7 @@ create table if not exists public.machines (
   line_id     uuid not null references public.lines(id) on delete cascade,
   name        text not null,
   target_output numeric,                 -- Per Shift Production (auto-fills form)
+  pieces_per_minute numeric,              -- PPM used to recalculate target if output exceeds target
   units       text,                       -- 'Pcs' or 'Kgs'
   is_active   boolean not null default true,
   created_at  timestamptz not null default now(),
@@ -123,6 +124,8 @@ create table if not exists public.oee_records (
   planned_time_hours    numeric not null,                 -- entered in HOURS
   planned_time_minutes  numeric generated always as (planned_time_hours * 60) stored,
   downtime_minutes      numeric not null default 0,       -- entered in minutes
+  operational_hours     numeric,                          -- entered when actual output exceeds target
+  pieces_per_minute     numeric,                          -- copied from machine master data
   actual_output         numeric not null default 0,       -- pieces
   target_output         numeric not null default 0,       -- pieces
   good_qty              numeric not null default 0,       -- pieces
