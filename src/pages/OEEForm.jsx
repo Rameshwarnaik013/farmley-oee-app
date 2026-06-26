@@ -34,6 +34,15 @@ const targetFromOperationalHours = (hours, ppm) => {
   return Math.round(target * 100) / 100
 }
 
+// Indore + Packing Line "table" machines: Target = rate × Number of Tables.
+//   Table          -> 3000
+//   Table - Airlines -> 9000
+const INDORE_TABLE_RATES = { Table: 3000, 'Table - Airlines': 9000 }
+const indoreTableRate = (plantName, isPacking, machineName) =>
+  (plantName || '') === 'Indore' && isPacking
+    ? INDORE_TABLE_RATES[machineName || ''] || 0
+    : 0
+
 export default function OEEForm() {
   const { plantId } = useParams()
   const navigate = useNavigate()
@@ -92,14 +101,11 @@ export default function OEEForm() {
   const isPacking = (selectedLine?.name || '').toLowerCase().includes('packing')
   const unit = unitForLine(selectedLine?.name)
 
-  // Special case: Indore + Packing Line + "Table" -> Target = 3000 x #tables.
-  const TABLE_RATE = 3000
-  const isIndoreTable =
-    (plant?.name || '') === 'Indore' &&
-    isPacking &&
-    (selectedMachine?.name || '') === 'Table'
+  // Special case: Indore + Packing Line + table machine -> Target = rate x #tables.
+  const tableRate = indoreTableRate(plant?.name, isPacking, selectedMachine?.name)
+  const isIndoreTable = tableRate > 0
   const baseTargetOutput = isIndoreTable
-    ? (form?.number_of_tables === '' ? '' : TABLE_RATE * (Number(form?.number_of_tables) || 0))
+    ? (form?.number_of_tables === '' ? '' : tableRate * (Number(form?.number_of_tables) || 0))
     : (selectedMachine?.target_output ?? '')
   const dbPpm = toNumber(selectedMachine?.pieces_per_minute)
   const masterPpm = getMasterPpm(plant?.name, selectedLine?.name, selectedMachine?.name)
@@ -160,8 +166,7 @@ export default function OEEForm() {
   const onMachineChange = (e) => {
     const machine_id = e.target.value
     const m = machines.find((x) => x.id === machine_id)
-    const indoreTable =
-      (plant?.name || '') === 'Indore' && isPacking && (m?.name || '') === 'Table'
+    const indoreTable = indoreTableRate(plant?.name, isPacking, m?.name) > 0
     setForm((f) => ({
       ...f,
       machine_id,
@@ -171,13 +176,13 @@ export default function OEEForm() {
     }))
   }
 
-  // Number of Tables -> Target Output = 2500 x tables (Indore Table only).
+  // Number of Tables -> Target Output = rate x tables (Indore table machines only).
   const onTablesChange = (e) => {
     const value = e.target.value
     setForm((f) => ({
       ...f,
       number_of_tables: value,
-      target_output: value === '' ? '' : TABLE_RATE * (Number(value) || 0),
+      target_output: value === '' ? '' : tableRate * (Number(value) || 0),
       operational_hours: '',
     }))
   }
@@ -373,7 +378,7 @@ export default function OEEForm() {
                 required
               />
               <small style={{ color: 'var(--muted)' }}>
-                Target = {TABLE_RATE.toLocaleString()} × tables
+                Target = {tableRate.toLocaleString()} × tables
               </small>
             </div>
           )}
@@ -432,7 +437,7 @@ export default function OEEForm() {
             />
             <small style={{ color: 'var(--muted)' }}>
               {isIndoreTable
-                ? `${TABLE_RATE.toLocaleString()} × number of tables`
+                ? `${tableRate.toLocaleString()} × number of tables`
                 : 'From machine’s Per Shift Production'}
             </small>
           </div>
