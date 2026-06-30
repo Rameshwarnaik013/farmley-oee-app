@@ -56,6 +56,7 @@ Deno.serve(async (req) => {
       plant: rec.plants?.name ?? '',
       line: rec.lines?.name ?? '',
       machine: rec.machines?.name ?? '',
+      machine_status: rec.machine_status ?? '',
       shift: rec.shift ?? '',
       planned_time_minutes: rec.planned_time_minutes,
       downtime_minutes: rec.downtime_minutes,

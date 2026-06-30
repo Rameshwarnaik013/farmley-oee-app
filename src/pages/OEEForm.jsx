@@ -43,6 +43,20 @@ const indoreTableRate = (plantName, isPacking, machineName) =>
     ? INDORE_TABLE_RATES[machineName || ''] || 0
     : 0
 
+// Indore machines whose auto-filled Target Output is a default the operator may
+// override per entry (value still comes from machine master data in Supabase).
+const INDORE_EDITABLE_TARGET_MACHINES = ['Mixing Line 1', 'Oven1', 'Oven2']
+const isEditableTargetMachine = (plantName, machineName) =>
+  (plantName || '') === 'Indore' &&
+  INDORE_EDITABLE_TARGET_MACHINES.includes(machineName || '')
+
+// Machine Status — defaulted in Supabase, editable per entry, synced to Sheets.
+const MACHINE_STATUS_OPTIONS = [
+  'Running / Planned for Production',
+  'Not Planned for Production',
+]
+const DEFAULT_MACHINE_STATUS = MACHINE_STATUS_OPTIONS[0]
+
 export default function OEEForm() {
   const { plantId } = useParams()
   const navigate = useNavigate()
@@ -76,6 +90,7 @@ export default function OEEForm() {
         machine_id: '',
         record_date: new Date().toISOString().slice(0, 10),
         shift: defaultShift(pl?.name),
+        machine_status: DEFAULT_MACHINE_STATUS,
         planned_time_hours: pl?.default_planned_hours ?? 9, // per-plant default
         downtime_minutes: '',
         actual_output: '',
@@ -104,6 +119,7 @@ export default function OEEForm() {
   // Special case: Indore + Packing Line + table machine -> Target = rate x #tables.
   const tableRate = indoreTableRate(plant?.name, isPacking, selectedMachine?.name)
   const isIndoreTable = tableRate > 0
+  const targetEditable = isEditableTargetMachine(plant?.name, selectedMachine?.name)
   const baseTargetOutput = isIndoreTable
     ? (form?.number_of_tables === '' ? '' : tableRate * (Number(form?.number_of_tables) || 0))
     : (selectedMachine?.target_output ?? '')
@@ -187,6 +203,12 @@ export default function OEEForm() {
     }))
   }
 
+  // Editable Target Output (only for the editable-default Indore machines).
+  const onTargetOutputChange = (e) => {
+    const value = e.target.value
+    setForm((f) => ({ ...f, target_output: value }))
+  }
+
   const onOperationalHoursChange = (e) => {
     const value = e.target.value
     setForm((f) => ({
@@ -216,6 +238,8 @@ export default function OEEForm() {
       return setError('Number of Cycles is required for Roasting Line.')
     if (isIndoreTable && (form.number_of_tables === '' || Number(form.number_of_tables) <= 0))
       return setError('Number of Tables is required for Indore Table (must be > 0).')
+    if (targetEditable && (form.target_output === '' || Number(form.target_output) <= 0))
+      return setError('Target Output is required (must be > 0).')
     if (actualExceedsBaseTarget && !ppm)
       return setError('Pieces Per Minute (PPM) is missing for the selected machine.')
     if (actualExceedsBaseTarget && (form.operational_hours === '' || Number(form.operational_hours) <= 0))
@@ -229,6 +253,7 @@ export default function OEEForm() {
       machine_id: form.machine_id || null,
       record_date: form.record_date,
       shift: form.shift || null,
+      machine_status: form.machine_status || DEFAULT_MACHINE_STATUS,
       units: unit === 'pieces' ? 'Pcs' : 'Kgs',
       number_of_cycles: isRoasting ? Number(form.number_of_cycles) || 0 : null,
       operational_hours: showOperationalHours ? Number(form.operational_hours) || 0 : null,
@@ -354,6 +379,16 @@ export default function OEEForm() {
             <small style={{ color: 'var(--muted)' }}>Auto-set by IST time; editable</small>
           </div>
 
+          <div>
+            <label>Machine Status</label>
+            <select value={form.machine_status} onChange={update('machine_status')}>
+              {MACHINE_STATUS_OPTIONS.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <small style={{ color: 'var(--muted)' }}>Default; editable per entry</small>
+          </div>
+
           {isRoasting && (
             <div>
               <label>Number of Cycles *</label>
@@ -427,18 +462,23 @@ export default function OEEForm() {
           )}
 
           <div>
-            <label>{outLabel('Target Output')} (auto)</label>
+            <label>{outLabel('Target Output')} {targetEditable ? '*' : '(auto)'}</label>
             <input
               type="number"
+              min="0" step="any"
               value={form.target_output}
-              readOnly
+              onChange={targetEditable ? onTargetOutputChange : undefined}
+              readOnly={!targetEditable}
+              required={targetEditable}
               placeholder={form.machine_id ? '' : 'Select a machine'}
-              style={{ background: 'var(--bg)' }}
+              style={targetEditable ? undefined : { background: 'var(--bg)' }}
             />
             <small style={{ color: 'var(--muted)' }}>
               {isIndoreTable
                 ? `${tableRate.toLocaleString()} × number of tables`
-                : 'From machine’s Per Shift Production'}
+                : targetEditable
+                  ? 'Default from master data; editable'
+                  : 'From machine’s Per Shift Production'}
             </small>
           </div>
 

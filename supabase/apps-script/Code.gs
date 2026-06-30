@@ -12,7 +12,7 @@ var SHARED_SECRET = 'CHANGE_ME_to_a_long_random_string';
 var SHEET_NAME = 'OEE Records';
 
 var HEADERS = [
-  'ID', 'Date', 'Plant', 'Line', 'Machine', 'Shift',
+  'ID', 'Date', 'Plant', 'Line', 'Machine', 'Machine Status', 'Shift',
   'Planned Time (min)', 'Downtime (min)', 'Operational Hours', 'Pieces Per Minute (PPM)',
   'Actual Output', 'Target Output',
   'Good Qty', 'Availability %', 'Performance %', 'Quality %', 'OEE %', 'Created At',
@@ -40,6 +40,7 @@ function doPost(e) {
       body.plant,
       body.line,
       body.machine,
+      body.machine_status,
       body.shift,
       body.planned_time_minutes,
       body.downtime_minutes,

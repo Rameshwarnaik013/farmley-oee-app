@@ -37,7 +37,7 @@ var RECIPIENTS = [
 var TEST_EMAIL = 'jatoth.r@farmley.com'; // delivery-test recipient
 
 var HEADERS = [
-  'ID', 'Date', 'Plant', 'Line', 'Machine', 'Shift', 'Units',
+  'ID', 'Date', 'Plant', 'Line', 'Machine', 'Machine Status', 'Shift', 'Units',
   'Planned Time (min)', 'Downtime (min) [Breakdown]', 'Operational Hours',
   'Pieces Per Minute (PPM)', 'No. of Cycles',
   'Actual Output', 'Target Output', 'Good Qty',
@@ -145,7 +145,7 @@ function fetchAllRecords() {
     var to = from + PAGE_SIZE - 1;
     var url = SUPABASE_URL + '/rest/v1/oee_records'
       + '?select=' + encodeURIComponent(
-          'id,record_date,shift,units,number_of_cycles,'
+          'id,record_date,shift,machine_status,units,number_of_cycles,'
         + 'planned_time_minutes,downtime_minutes,operational_hours,pieces_per_minute,'
         + 'actual_output,target_output,good_qty,'
         + 'availability_pct,performance_pct,quality_pct,oee_pct,'
@@ -200,6 +200,7 @@ function syncNow() {
       r.plants ? r.plants.name : '',
       r.lines ? r.lines.name : '',
       r.machines ? r.machines.name : '',
+      r.machine_status || '',
       r.shift || '',
       r.units || '',
       r.planned_time_minutes,
@@ -416,6 +417,7 @@ function recordToRow(r, userMap, userPlantsMap) {
     r.plants ? r.plants.name : '',
     r.lines ? r.lines.name : '',
     r.machines ? r.machines.name : '',
+    r.machine_status || '',
     r.shift || '', r.units || '',
     r.planned_time_minutes, r.downtime_minutes,
     (r.operational_hours === null || r.operational_hours === undefined) ? '' : r.operational_hours,

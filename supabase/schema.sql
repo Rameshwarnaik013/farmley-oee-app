@@ -117,6 +117,7 @@ create table if not exists public.oee_records (
 
   record_date       date not null default current_date,
   shift             text,
+  machine_status    text default 'Running / Planned for Production',  -- editable per entry
   number_of_cycles  numeric,                          -- Roasting Line only
   units             text,                             -- 'Pcs' or 'Kgs'
 
