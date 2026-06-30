@@ -4,6 +4,11 @@ import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/AuthContext.jsx'
 import { calculateOEE, hoursToMinutes, formatPct } from '../lib/oee'
 import { getMasterPpm } from '../lib/ppmMaster'
+import {
+  defaultMachineStatus,
+  MACHINE_STATUS_RUNNING,
+  MACHINE_STATUS_NOT_PLANNED,
+} from '../lib/machineStatusDefaults'
 
 // Units by line type: Roasting & Mixing in Kgs, Packing in Pieces.
 function unitForLine(lineName) {
@@ -50,12 +55,9 @@ const isEditableTargetMachine = (plantName, machineName) =>
   (plantName || '') === 'Indore' &&
   INDORE_EDITABLE_TARGET_MACHINES.includes(machineName || '')
 
-// Machine Status — defaulted in Supabase, editable per entry, synced to Sheets.
-const MACHINE_STATUS_OPTIONS = [
-  'Running / Planned for Production',
-  'Not Planned for Production',
-]
-const DEFAULT_MACHINE_STATUS = MACHINE_STATUS_OPTIONS[0]
+// Machine Status — default depends on plant/line/machine/shift (see
+// machineStatusDefaults), editable per entry, synced to Sheets.
+const MACHINE_STATUS_OPTIONS = [MACHINE_STATUS_RUNNING, MACHINE_STATUS_NOT_PLANNED]
 
 export default function OEEForm() {
   const { plantId } = useParams()
@@ -90,7 +92,7 @@ export default function OEEForm() {
         machine_id: '',
         record_date: new Date().toISOString().slice(0, 10),
         shift: defaultShift(pl?.name),
-        machine_status: DEFAULT_MACHINE_STATUS,
+        machine_status: MACHINE_STATUS_RUNNING, // recomputed once a machine is picked
         planned_time_hours: pl?.default_planned_hours ?? 9, // per-plant default
         downtime_minutes: '',
         actual_output: '',
@@ -174,10 +176,12 @@ export default function OEEForm() {
       target_output: '',
       number_of_tables: '',
       operational_hours: '',
+      machine_status: MACHINE_STATUS_RUNNING, // no machine selected yet
     }))
   }
 
-  // Selecting a machine auto-fills its Target Output (Per Shift Production).
+  // Selecting a machine auto-fills its Target Output (Per Shift Production) and
+  // the default Machine Status for this plant/line/machine/shift.
   // For Indore "Table", target is driven by Number of Tables instead.
   const onMachineChange = (e) => {
     const machine_id = e.target.value
@@ -189,6 +193,22 @@ export default function OEEForm() {
       number_of_tables: '',
       operational_hours: '',
       target_output: indoreTable ? '' : (m?.target_output ?? ''),
+      machine_status: defaultMachineStatus(plant?.name, selectedLine?.name, m?.name, f.shift),
+    }))
+  }
+
+  // Shift also drives the default Machine Status, so recompute on change.
+  const onShiftChange = (e) => {
+    const shift = e.target.value
+    setForm((f) => ({
+      ...f,
+      shift,
+      machine_status: defaultMachineStatus(
+        plant?.name,
+        selectedLine?.name,
+        selectedMachine?.name,
+        shift,
+      ),
     }))
   }
 
@@ -253,7 +273,7 @@ export default function OEEForm() {
       machine_id: form.machine_id || null,
       record_date: form.record_date,
       shift: form.shift || null,
-      machine_status: form.machine_status || DEFAULT_MACHINE_STATUS,
+      machine_status: form.machine_status || MACHINE_STATUS_RUNNING,
       units: unit === 'pieces' ? 'Pcs' : 'Kgs',
       number_of_cycles: isRoasting ? Number(form.number_of_cycles) || 0 : null,
       operational_hours: showOperationalHours ? Number(form.operational_hours) || 0 : null,
@@ -372,7 +392,7 @@ export default function OEEForm() {
 
           <div>
             <label>Shift</label>
-            <select value={form.shift} onChange={update('shift')}>
+            <select value={form.shift} onChange={onShiftChange}>
               <option value="Day">Day</option>
               <option value="Night">Night</option>
             </select>
