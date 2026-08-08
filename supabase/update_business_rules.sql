@@ -78,6 +78,7 @@ with p as (select id, name from public.plants),
          ('Purnia','Packing Line','Can Seaming 5 (Bubber 3)',   3840,  'Pcs'),
          ('Purnia','Packing Line','FFS 1 (RnF FFS)',            21600, 'Pcs'),
          ('Purnia','Packing Line','FFS 2 (Prasadam FFS)',       12480, 'Pcs'),
+         ('Purnia','Packing Line','RnF FFS - Pace',             43200, 'Pcs'),
          -- Purnia (Purnea) · Roasting Line
          ('Purnia','Roasting Line','Roasting and Flavouring Machine (Old)',          810,  'Kgs'),
          ('Purnia','Roasting Line','Roasting and Flavouring Machine-Fabcon (New)',   2250, 'Kgs')
@@ -134,6 +135,7 @@ from (values
   ('Purnia', 'Packing Line',  'Can Seaming 5 (Bubber 3)',                     7.111111111111112),
   ('Purnia', 'Packing Line',  'FFS 1 (RnF FFS)',                              40),
   ('Purnia', 'Packing Line',  'FFS 2 (Prasadam FFS)',                         23.11111111111111),
+  ('Purnia', 'Packing Line',  'RnF FFS - Pace',                               80),
   ('Purnia', 'Roasting Line', 'Roasting and Flavouring Machine (Old)',        1.5),
   ('Purnia', 'Roasting Line', 'Roasting and Flavouring Machine-Fabcon (New)', 4.166666666666667)
 ) as v(plant, line, machine, ppm)
