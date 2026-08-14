@@ -55,6 +55,18 @@ const isEditableTargetMachine = (plantName, machineName) =>
   (plantName || '') === 'Indore' &&
   INDORE_EDITABLE_TARGET_MACHINES.includes(machineName || '')
 
+// Purnia Roasting Line: Target scales with Planned Time (hours). The machine's
+// stored target_output is the standard 9-hour target, so the per-hour rate is
+// target/9 (e.g. Fabcon New 2250 -> 2250/9 per hour) x Planned Time (hours).
+const PURNIA_ROAST_STD_HOURS = 9
+const isPurniaRoasting = (plantName, isRoasting) =>
+  (plantName || '') === 'Purnia' && isRoasting
+const purniaRoastTarget = (baseTarget, hours) => {
+  if (hours === '' || hours === null || hours === undefined) return ''
+  const base = toNumber(baseTarget)
+  return Math.round((base / PURNIA_ROAST_STD_HOURS) * toNumber(hours) * 100) / 100
+}
+
 // Machine Status — default depends on plant/line/machine/shift (see
 // machineStatusDefaults), editable per entry, synced to Sheets.
 const MACHINE_STATUS_OPTIONS = [MACHINE_STATUS_RUNNING, MACHINE_STATUS_NOT_PLANNED]
@@ -122,6 +134,7 @@ export default function OEEForm() {
   const tableRate = indoreTableRate(plant?.name, isPacking, selectedMachine?.name)
   const isIndoreTable = tableRate > 0
   const targetEditable = isEditableTargetMachine(plant?.name, selectedMachine?.name)
+  const isPurniaRoast = isPurniaRoasting(plant?.name, isRoasting)
   const baseTargetOutput = isIndoreTable
     ? (form?.number_of_tables === '' ? '' : tableRate * (Number(form?.number_of_tables) || 0))
     : (selectedMachine?.target_output ?? '')
@@ -187,13 +200,30 @@ export default function OEEForm() {
     const machine_id = e.target.value
     const m = machines.find((x) => x.id === machine_id)
     const indoreTable = indoreTableRate(plant?.name, isPacking, m?.name) > 0
+    const purniaRoast = isPurniaRoasting(plant?.name, isRoasting)
     setForm((f) => ({
       ...f,
       machine_id,
       number_of_tables: '',
       operational_hours: '',
-      target_output: indoreTable ? '' : (m?.target_output ?? ''),
+      target_output: indoreTable
+        ? ''
+        : purniaRoast
+          ? purniaRoastTarget(m?.target_output, f.planned_time_hours)
+          : (m?.target_output ?? ''),
       machine_status: defaultMachineStatus(plant?.name, selectedLine?.name, m?.name, f.shift),
+    }))
+  }
+
+  // Planned Time drives the Purnia Roasting target (target/9 per hour x hours).
+  const onPlannedTimeChange = (e) => {
+    const value = e.target.value
+    setForm((f) => ({
+      ...f,
+      planned_time_hours: value,
+      target_output: isPurniaRoast
+        ? purniaRoastTarget(selectedMachine?.target_output, value)
+        : f.target_output,
     }))
   }
 
@@ -371,11 +401,12 @@ export default function OEEForm() {
             <input
               type="number" min="0" step="any"
               value={form.planned_time_hours}
-              onChange={update('planned_time_hours')}
+              onChange={onPlannedTimeChange}
               required
             />
             <small style={{ color: 'var(--muted)' }}>
               = {hoursToMinutes(form.planned_time_hours)} minutes
+              {isPurniaRoast && ' · drives Target Output'}
             </small>
           </div>
 
@@ -498,7 +529,9 @@ export default function OEEForm() {
                 ? `${tableRate.toLocaleString()} × number of tables`
                 : targetEditable
                   ? 'Default from master data; editable'
-                  : 'From machine’s Per Shift Production'}
+                  : isPurniaRoast
+                    ? '(Per Shift Production ÷ 9) × Planned Time (hours)'
+                    : 'From machine’s Per Shift Production'}
             </small>
           </div>
 
