@@ -55,9 +55,9 @@ const isEditableTargetMachine = (plantName, machineName) =>
   (plantName || '') === 'Indore' &&
   INDORE_EDITABLE_TARGET_MACHINES.includes(machineName || '')
 
-// Purnia Roasting Line: Target = Planned Time (hours) x 250 Kg/hr, where
-// 250 = standard 2250 Kg over a 9-hour shift. Flat rate for the whole line.
-const PURNIA_ROAST_KG_PER_HOUR = 2250 / 9 // = 250
+// Purnia Roasting Line: Target = Planned Time (hours) x 80 Kg/hr.
+// Flat rate for the whole line.
+const PURNIA_ROAST_KG_PER_HOUR = 80
 const isPurniaRoasting = (plantName, isRoasting) =>
   (plantName || '') === 'Purnia' && isRoasting
 const purniaRoastTarget = (hours) => {
@@ -528,7 +528,7 @@ export default function OEEForm() {
                 : targetEditable
                   ? 'Default from master data; editable'
                   : isPurniaRoast
-                    ? 'Planned Time (hours) × 250 Kg/hr'
+                    ? 'Planned Time (hours) × 80 Kg/hr'
                     : 'From machine’s Per Shift Production'}
             </small>
           </div>
