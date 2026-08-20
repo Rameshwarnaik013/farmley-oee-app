@@ -55,14 +55,19 @@ const isEditableTargetMachine = (plantName, machineName) =>
   (plantName || '') === 'Indore' &&
   INDORE_EDITABLE_TARGET_MACHINES.includes(machineName || '')
 
-// Purnia Roasting Line: Target = Planned Time (hours) x 80 Kg/hr.
-// Flat rate for the whole line.
-const PURNIA_ROAST_KG_PER_HOUR = 80
+// Purnia Roasting Line: Target = Planned Time (hours) x per-hour rate.
+// Fabcon (New) runs at 250 Kg/hr; every other roasting machine at 80 Kg/hr.
+const PURNIA_ROAST_DEFAULT_KG_PER_HOUR = 80
+const PURNIA_ROAST_RATES = {
+  'Roasting and Flavouring Machine-Fabcon (New)': 250,
+}
+const purniaRoastRate = (machineName) =>
+  PURNIA_ROAST_RATES[machineName || ''] || PURNIA_ROAST_DEFAULT_KG_PER_HOUR
 const isPurniaRoasting = (plantName, isRoasting) =>
   (plantName || '') === 'Purnia' && isRoasting
-const purniaRoastTarget = (hours) => {
+const purniaRoastTarget = (hours, machineName) => {
   if (hours === '' || hours === null || hours === undefined) return ''
-  return Math.round(PURNIA_ROAST_KG_PER_HOUR * toNumber(hours) * 100) / 100
+  return Math.round(purniaRoastRate(machineName) * toNumber(hours) * 100) / 100
 }
 
 // Machine Status — default depends on plant/line/machine/shift (see
@@ -207,7 +212,7 @@ export default function OEEForm() {
       target_output: indoreTable
         ? ''
         : purniaRoast
-          ? purniaRoastTarget(f.planned_time_hours)
+          ? purniaRoastTarget(f.planned_time_hours, m?.name)
           : (m?.target_output ?? ''),
       machine_status: defaultMachineStatus(plant?.name, selectedLine?.name, m?.name, f.shift),
     }))
@@ -220,7 +225,7 @@ export default function OEEForm() {
       ...f,
       planned_time_hours: value,
       target_output: isPurniaRoast
-        ? purniaRoastTarget(value)
+        ? purniaRoastTarget(value, selectedMachine?.name)
         : f.target_output,
     }))
   }
@@ -528,7 +533,7 @@ export default function OEEForm() {
                 : targetEditable
                   ? 'Default from master data; editable'
                   : isPurniaRoast
-                    ? 'Planned Time (hours) × 80 Kg/hr'
+                    ? `Planned Time (hours) × ${purniaRoastRate(selectedMachine?.name)} Kg/hr`
                     : 'From machine’s Per Shift Production'}
             </small>
           </div>
