@@ -138,11 +138,47 @@ create table if not exists public.oee_records (
   oee_pct           numeric,
 
   synced_to_sheet   boolean not null default false,
+  row_code          text,                             -- md5 fingerprint (see trigger below)
   created_at        timestamptz not null default now()
 );
 
 create index if not exists oee_records_plant_idx on public.oee_records (plant_id);
 create index if not exists oee_records_date_idx  on public.oee_records (record_date);
+
+-- Deterministic fingerprint per row so exact duplicates collapse to one.
+-- (See update_row_code_dedup.sql for the same logic as a re-runnable migration.)
+create or replace function public.oee_row_code()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.row_code := md5(
+    coalesce(new.plant_id::text,'')        || '|' ||
+    coalesce(new.line_id::text,'')         || '|' ||
+    coalesce(new.machine_id::text,'')      || '|' ||
+    coalesce(new.record_date::text,'')     || '|' ||
+    coalesce(new.shift,'')                 || '|' ||
+    coalesce(new.machine_status,'')        || '|' ||
+    coalesce(new.planned_time_hours::text,'')  || '|' ||
+    coalesce(new.downtime_minutes::text,'')    || '|' ||
+    coalesce(new.operational_hours::text,'')   || '|' ||
+    coalesce(new.pieces_per_minute::text,'')   || '|' ||
+    coalesce(new.number_of_cycles::text,'')    || '|' ||
+    coalesce(new.actual_output::text,'')       || '|' ||
+    coalesce(new.target_output::text,'')       || '|' ||
+    coalesce(new.good_qty::text,'')
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists oee_row_code_trg on public.oee_records;
+create trigger oee_row_code_trg
+  before insert or update on public.oee_records
+  for each row execute function public.oee_row_code();
+
+create unique index if not exists oee_records_row_code_uidx
+  on public.oee_records (row_code);
 
 -- ----------------------------------------------------------------------------
 -- 4. ROW LEVEL SECURITY

@@ -469,44 +469,81 @@ function getReportAttachments(recRows, oeeRows) {
   try { return [buildFilteredXlsxBlob(recRows, oeeRows)]; } catch (e) { return []; }
 }
 
-function emailLatestAdoption() {
-  var userMap = fetchUserMap();
-  var machines = fetchMachines();
-  var records = fetchAllRecords();
-  if (!records.length) return;
+// Latest record_date for each plant (so one plant's stray/future date no longer
+// hides the other plants' most recent entries).
+function latestDatePerPlant(records) {
+  var m = {};
+  records.forEach(function (r) {
+    var p = r.plants ? r.plants.name : '';
+    if (!p) return;
+    if (!m[p] || r.record_date > m[p]) m[p] = r.record_date;
+  });
+  return m;
+}
 
-  // Latest day = max record date; previous day = latest - 1.
+// Attachment rows: each plant's OWN latest-day Day + previous-day Night.
+function filterRecordsForReportPerPlant(records, latestByPlant, globalMax) {
+  return records.filter(function (r) {
+    var p = r.plants ? r.plants.name : '';
+    var d = latestByPlant[p] || globalMax;
+    var sh = (r.shift || '').toLowerCase();
+    return (r.record_date === d && sh === 'day')
+        || (r.record_date === addDays(d, -1) && sh === 'night');
+  });
+}
+
+// Build every email section using a per-plant "recent date": Day = that plant's
+// latest date, Night = the day before it. Plants with no records fall back to
+// the global latest date so they still show as Not Filled.
+function computeReportSections(records, machines, userMap, userPlantsMap) {
   var maxDate = records.reduce(function (a, r) {
     return r.record_date > a ? r.record_date : a;
   }, records[0].record_date);
-  var prevDate = addDays(maxDate, -1);
+  var latestByPlant = latestDatePerPlant(records);
+  var dayOf = function (plant) { return latestByPlant[plant] || maxDate; };
 
-  // Force both dates to exist so "Not Filled" rows show even with no entries.
-  var rows = buildAdoption(records, machines, userMap, [maxDate, prevDate]);
-  var dayRows = rows.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
-  var nightRows = rows.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
+  // Ensure each plant's latest + previous date rows get emitted by buildAdoption.
+  var extra = {};
+  extra[maxDate] = 1; extra[addDays(maxDate, -1)] = 1;
+  Object.keys(latestByPlant).forEach(function (p) {
+    extra[latestByPlant[p]] = 1;
+    extra[addDays(latestByPlant[p], -1)] = 1;
+  });
 
-  // OEE % by line for the same Day(latest)/Night(prev) sections.
+  var rows = buildAdoption(records, machines, userMap, Object.keys(extra));
+  var dayRows = rows.filter(function (r) { return r.shift === 'Day' && r.date === dayOf(r.plant); });
+  var nightRows = rows.filter(function (r) { return r.shift === 'Night' && r.date === addDays(dayOf(r.plant), -1); });
+
   var oee = buildOeeByLine(records, userMap);
-  var dayOee = oee.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
-  var nightOee = oee.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
+  var dayOee = oee.filter(function (r) { return r.shift === 'Day' && r.date === dayOf(r.plant); });
+  var nightOee = oee.filter(function (r) { return r.shift === 'Night' && r.date === addDays(dayOf(r.plant), -1); });
 
-  // Attachment rows: only latest-day Day + previous-day Night.
-  var userPlantsMap = fetchUserPlantsMap();
-  var recRows = filterRecordsForReport(records, maxDate, prevDate)
+  var recRows = filterRecordsForReportPerPlant(records, latestByPlant, maxDate)
     .map(function (r) { return recordToRow(r, userMap, userPlantsMap); });
   var oeeRows = dayOee.concat(nightOee).map(function (r) {
     return [r.date, r.plant, r.line, r.shift, r.oee];
   });
 
+  return { maxDate: maxDate, dayRows: dayRows, nightRows: nightRows,
+           dayOee: dayOee, nightOee: nightOee, recRows: recRows, oeeRows: oeeRows };
+}
+
+function emailLatestAdoption() {
+  var userMap = fetchUserMap();
+  var machines = fetchMachines();
+  var records = fetchAllRecords();
+  if (!records.length) return;
+  var userPlantsMap = fetchUserPlantsMap();
+  var rep = computeReportSections(records, machines, userMap, userPlantsMap);
+
   // Always send (fixed daily trigger). Keep ONE trigger to avoid duplicates.
   MailApp.sendEmail({
     to: RECIPIENTS,
-    subject: 'Farmley OEE — Adoption + OEE (Day ' + maxDate + ' / Night ' + prevDate + ')',
-    htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows, dayOee, nightOee),
-    attachments: getReportAttachments(recRows, oeeRows),
+    subject: 'Farmley OEE — Adoption + OEE (latest date per plant, as of ' + rep.maxDate + ')',
+    htmlBody: buildAdoptionEmailHtml(rep.dayRows, rep.nightRows, rep.dayOee, rep.nightOee),
+    attachments: getReportAttachments(rep.recRows, rep.oeeRows),
   });
-  PropertiesService.getScriptProperties().setProperty('lastEmailedDate', maxDate);
+  PropertiesService.getScriptProperties().setProperty('lastEmailedDate', rep.maxDate);
 }
 
 /** Sends the full new-format report to TEST_EMAIL only (no guard, no team). */
@@ -519,29 +556,14 @@ function emailAdoptionToSelf() {
       htmlBody: 'Ran OK, but Supabase has no OEE records yet.' });
     return;
   }
-  var maxDate = records.reduce(function (a, r) {
-    return r.record_date > a ? r.record_date : a;
-  }, records[0].record_date);
-  var prevDate = addDays(maxDate, -1);
-  var rows = buildAdoption(records, machines, userMap, [maxDate, prevDate]);
-  var dayRows = rows.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
-  var nightRows = rows.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
-  var oee = buildOeeByLine(records, userMap);
-  var dayOee = oee.filter(function (r) { return r.date === maxDate && r.shift === 'Day'; });
-  var nightOee = oee.filter(function (r) { return r.date === prevDate && r.shift === 'Night'; });
-
   var userPlantsMap = fetchUserPlantsMap();
-  var recRows = filterRecordsForReport(records, maxDate, prevDate)
-    .map(function (r) { return recordToRow(r, userMap, userPlantsMap); });
-  var oeeRows = dayOee.concat(nightOee).map(function (r) {
-    return [r.date, r.plant, r.line, r.shift, r.oee];
-  });
+  var rep = computeReportSections(records, machines, userMap, userPlantsMap);
 
   MailApp.sendEmail({
     to: TEST_EMAIL,
-    subject: '[TEST to self] Farmley OEE — Adoption + OEE (Day ' + maxDate + ' / Night ' + prevDate + ')',
-    htmlBody: buildAdoptionEmailHtml(maxDate, dayRows, prevDate, nightRows, dayOee, nightOee),
-    attachments: getReportAttachments(recRows, oeeRows),
+    subject: '[TEST to self] Farmley OEE — Adoption + OEE (latest date per plant, as of ' + rep.maxDate + ')',
+    htmlBody: buildAdoptionEmailHtml(rep.dayRows, rep.nightRows, rep.dayOee, rep.nightOee),
+    attachments: getReportAttachments(rep.recRows, rep.oeeRows),
   });
 }
 
@@ -551,13 +573,14 @@ function renderAdoptionTable(title, rows) {
   var html = '<h3 style="margin:16px 0 6px;color:#15803d">' + title + '</h3>';
   if (!rows.length) return html + '<p style="color:#64748b">No data.</p>';
   html += '<table style="border-collapse:collapse;font-size:14px">'
-    + '<tr><th ' + th + '>Plant</th><th ' + th + '>Created By</th>'
+    + '<tr><th ' + th + '>Date</th><th ' + th + '>Plant</th><th ' + th + '>Created By</th>'
     + '<th ' + th + '>Roasting</th><th ' + th + '>Packing</th><th ' + th + '>Mixing</th>'
     + '<th ' + th + '>Overall %</th><th ' + th + '>Status</th></tr>';
   rows.forEach(function (r) {
     var bg = statusColor(r.status);
     var fc = (r.status === 'Not Filled') ? '#fff' : '#000';
     html += '<tr>'
+      + '<td ' + td + '>' + r.date + '</td>'
       + '<td ' + td + '>' + r.plant + '</td>'
       + '<td ' + td + '>' + r.createdBy + '</td>'
       + '<td ' + td + '>' + r.roasting + '</td>'
@@ -576,9 +599,10 @@ function renderOeeTable(title, rows) {
   var html = '<h3 style="margin:16px 0 6px;color:#b45309">' + title + '</h3>';
   if (!rows.length) return html + '<p style="color:#64748b">No data.</p>';
   html += '<table style="border-collapse:collapse;font-size:14px">'
-    + '<tr><th ' + th + '>Plant</th><th ' + th + '>Line</th><th ' + th + '>OEE %</th></tr>';
+    + '<tr><th ' + th + '>Date</th><th ' + th + '>Plant</th><th ' + th + '>Line</th><th ' + th + '>OEE %</th></tr>';
   rows.forEach(function (r) {
     html += '<tr>'
+      + '<td ' + td + '>' + r.date + '</td>'
       + '<td ' + td + '>' + r.plant + '</td>'
       + '<td ' + td + '>' + r.line + '</td>'
       + '<td ' + td + '>' + r.oee + '%</td>'
@@ -591,12 +615,12 @@ function renderOeeTable(title, rows) {
 function plantAvgFromLines(lineRows) {
   var g = {};
   (lineRows || []).forEach(function (r) {
-    if (!g[r.plant]) g[r.plant] = { sum: 0, n: 0 };
+    if (!g[r.plant]) g[r.plant] = { sum: 0, n: 0, date: r.date };
     g[r.plant].sum += r.oee;
     g[r.plant].n += 1;
   });
   return Object.keys(g).sort().map(function (p) {
-    return { plant: p, oee: Math.round((g[p].sum / g[p].n) * 100) / 100 };
+    return { plant: p, date: g[p].date, oee: Math.round((g[p].sum / g[p].n) * 100) / 100 };
   });
 }
 
@@ -606,24 +630,25 @@ function renderPlantOeeTable(title, rows) {
   var html = '<h3 style="margin:16px 0 6px;color:#0369a1">' + title + '</h3>';
   if (!rows.length) return html + '<p style="color:#64748b">No data.</p>';
   html += '<table style="border-collapse:collapse;font-size:14px">'
-    + '<tr><th ' + th + '>Plant</th><th ' + th + '>Overall OEE % (avg of lines)</th></tr>';
+    + '<tr><th ' + th + '>Date</th><th ' + th + '>Plant</th><th ' + th + '>Overall OEE % (avg of lines)</th></tr>';
   rows.forEach(function (r) {
-    html += '<tr><td ' + td + '>' + r.plant + '</td><td ' + td + '>' + r.oee + '%</td></tr>';
+    html += '<tr><td ' + td + '>' + r.date + '</td><td ' + td + '>' + r.plant + '</td><td ' + td + '>' + r.oee + '%</td></tr>';
   });
   return html + '</table>';
 }
 
-function buildAdoptionEmailHtml(dayDate, dayRows, nightDate, nightRows, dayOee, nightOee) {
+function buildAdoptionEmailHtml(dayRows, nightRows, dayOee, nightOee) {
   return '<div style="font-family:Arial,sans-serif">'
     + '<h2 style="color:#15803d">Farmley OEE — App Adoption</h2>'
-    + renderAdoptionTable('Day shift — ' + dayDate, dayRows)
-    + renderAdoptionTable('Night shift — ' + nightDate, nightRows)
+    + '<p style="color:#64748b;font-size:12px;margin:0 0 8px">Each plant shows its own most recent date — Day = the plant’s latest date, Night = the day before. (See the Date column.)</p>'
+    + renderAdoptionTable('Day shift — latest date per plant', dayRows)
+    + renderAdoptionTable('Night shift — previous date per plant', nightRows)
     + '<h2 style="color:#0369a1;margin-top:22px">Overall Plant OEE % (avg of lines)</h2>'
-    + renderPlantOeeTable('Day shift — ' + dayDate, plantAvgFromLines(dayOee))
-    + renderPlantOeeTable('Night shift — ' + nightDate, plantAvgFromLines(nightOee))
+    + renderPlantOeeTable('Day shift', plantAvgFromLines(dayOee))
+    + renderPlantOeeTable('Night shift', plantAvgFromLines(nightOee))
     + '<h2 style="color:#b45309;margin-top:22px">OEE % by Line (avg of machines)</h2>'
-    + renderOeeTable('Day shift — ' + dayDate, dayOee || [])
-    + renderOeeTable('Night shift — ' + nightDate, nightOee || [])
+    + renderOeeTable('Day shift', dayOee || [])
+    + renderOeeTable('Night shift', nightOee || [])
     + '<p style="color:#64748b;font-size:12px">Adoption: Red = partial · Dark red = not filled · Green = complete. '
     + 'Mixing excluded from Overall % for Purnia. Auto-generated from Supabase.</p></div>';
 }

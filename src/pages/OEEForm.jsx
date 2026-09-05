@@ -330,6 +330,8 @@ export default function OEEForm() {
 
     if (insErr) {
       setBusy(false)
+      if (insErr.code === '23505')
+        return setError('An identical entry already exists — this duplicate was not saved.')
       return setError(insErr.message)
     }
 
