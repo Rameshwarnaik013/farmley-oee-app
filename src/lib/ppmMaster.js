@@ -42,6 +42,8 @@ const ppmRows = [
   ['Purnia', 'Packing Line', 'Can Seaming 3 (Bubber 1)', 12],
   ['Purnia', 'Packing Line', 'Can Seaming 4 (Bubber 2)', 12],
   ['Purnia', 'Packing Line', 'Can Seaming 5 (Bubber 3)', 7],
+  ['Purnia', 'Packing Line', 'Can Seaming 6 (Ashoka 3)', 36],
+  ['Purnia', 'Packing Line', 'Can Seaming 7 (Ashoka 4)', 36],
   ['Purnia', 'Packing Line', 'FFS 1 (RnF FFS)', 40],
   ['Purnia', 'Packing Line', 'FFS 2 (Prasadam FFS)', 23],
   ['Purnia', 'Packing Line', 'RnF FFS - Pace', 80],
