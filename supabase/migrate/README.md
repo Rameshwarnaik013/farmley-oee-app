@@ -195,3 +195,32 @@ there **cannot be restored**; the local dump in `dump/` is the fallback copy.
 
 ### Still to do
 
+
+
+## The app is live (2026-11-21)
+
+`https://farmley-oee-app.vercel.app` now runs against the new project.
+
+The Vercel env vars could not be changed - the project lives in the Vercel
+account `rs-projects-f5c7f7ec`, which `jatoth.r@farmley.com` has no access to
+(404), and a personal Hobby account cannot take members. Redeploying alone was
+useless: the live bundle contained `https://qvyoiovlblorahqkatlj.supabase.co`,
+baked in from `VITE_SUPABASE_URL` at build time.
+
+So `src/lib/supabaseClient.js` now ignores an env var that names a retired
+project and uses the current one instead. Verified after the deploy:
+
+* the live bundle contains `https://qsqaqyvblvqzwfsruajz.supabase.co`;
+* the browser console logs the override warning naming both URLs;
+* the login page renders with no "Service restricted" banner;
+* `POST /auth/v1/token` returns `400 invalid_credentials` for a bogus account -
+  a restricted project answers `402` instead, so auth is genuinely working.
+
+**This is a workaround, not the end state.** When someone with access updates
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in that Vercel account, the
+app falls back to them with no code change, and `RETIRED_PROJECT_REFS` plus the
+defaults in `supabaseClient.js` should then be deleted.
+
+The only thing still unproven is a real user signing in. The bcrypt hashes were
+copied verbatim, which is the supported way to move users between projects, but
+it cannot be checked without someone's actual password.
