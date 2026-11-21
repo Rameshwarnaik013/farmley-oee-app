@@ -7,18 +7,48 @@
  * SETUP
  * 1. File -> Project Settings -> Time zone = Asia/Kolkata (for IST email time).
  * 2. Set SUPABASE_URL + SERVICE_KEY (Settings -> API -> service_role).
- * 3. Run "syncNow" (approve prompt). Run "installTrigger" (5-min sync) and
+ * 3. Run "syncNow" (approve prompt). Run "installTrigger" (2-hourly sync) and
  *    "installEmailTrigger" (daily email).
+ *
+ * Target sheet:
+ * https://docs.google.com/spreadsheets/d/14qXyE8KPFirwmYkYkAKs6yIfkcc5_7Hd2zZ9OyS9jrU/edit
+ *
+ * Syncs run every 2 hours, but only between noon and midnight IST - see
+ * SYNC_ACTIVE_FROM_HOUR. "Force full sync now" ignores the window.
+ *
+ * EGRESS: see SYNC_INTERVAL_HOURS below. Do not shorten the sync interval
+ * without re-checking Supabase egress - the old 5-minute full-table sync is
+ * what got the project API-restricted (HTTP 402, exceed_egress_quota).
  *
  * SECURITY: service_role has full DB access. Keep this script private.
  */
 
-var SUPABASE_URL = 'https://qvyoiovlblorahqkatlj.supabase.co';
+var SUPABASE_URL = 'https://qsqaqyvblvqzwfsruajz.supabase.co';
 var SERVICE_KEY  = 'PASTE_YOUR_SERVICE_ROLE_KEY_HERE';
 
 var SHEET_NAME = 'OEE Records';
 var ADOPTION_SHEET = 'App Adoption';
 var PAGE_SIZE  = 1000;
+
+/* ----------------------------- Egress control ----------------------------
+ * The Supabase free tier allows 5 GB egress/month. syncNow() downloads the
+ * whole oee_records table (~2 MB of JSON). On the old 5-minute trigger that
+ * was 288 full pulls/day, roughly 17 GB/month, which restricted the project.
+ *
+ * Now: sync every 2 hours, and before each pull run a ~1 KB probe (exact row
+ * count + newest created_at). If nothing changed, skip the pull entirely. A
+ * full rebuild is forced every FULL_SYNC_EVERY_N_RUNS runs anyway, so in-place
+ * Admin edits - which change neither the row count nor created_at - still
+ * reach the sheet.
+ * -------------------------------------------------------------------------*/
+var SYNC_INTERVAL_HOURS    = 2;   // Apps Script everyMinutes() only allows 1/5/10/15/30
+var FULL_SYNC_EVERY_N_RUNS = 3;
+
+// Active window, in the project's time zone (Asia/Kolkata). Syncing is paused
+// from midnight to noon; runs that fire in that window exit immediately and
+// cost nothing. 12 -> 24 means noon until midnight.
+var SYNC_ACTIVE_FROM_HOUR = 12;
+var SYNC_ACTIVE_TO_HOUR   = 24;
 
 // Daily adoption email
 var EMAIL_HOUR = 20; // 8 PM (project time zone — set to Asia/Kolkata)
@@ -84,7 +114,8 @@ function onOpen() {
     .addItem('Email adoption to me (test)', 'emailAdoptionToSelf')
     .addItem('Send test email', 'testEmail')
     .addSeparator()
-    .addItem('Install auto-sync (5 min)', 'installTrigger')
+    .addItem('Install auto-sync (2 hours)', 'installTrigger')
+    .addItem('Force full sync now', 'forceFullSync')
     .addItem('Install daily adoption email', 'installEmailTrigger')
     .addToUi();
 }
@@ -178,10 +209,67 @@ function fetchAllRecords() {
 
 /* ----------------------------- OEE Records tab --------------------------- */
 
-function syncNow() {
+/**
+ * Cheap change probe: one row + an exact count, instead of the whole table.
+ * Returns { changed, signature }. On any probe failure we report changed so a
+ * real sync still happens.
+ */
+function probeRecords() {
+  var props = PropertiesService.getScriptProperties();
+  var runs = Number(props.getProperty('runsSinceFullSync') || 0);
+  var last = props.getProperty('lastSyncSignature') || '';
+
+  var resp = UrlFetchApp.fetch(
+    SUPABASE_URL + '/rest/v1/oee_records?select=created_at&order=created_at.desc&limit=1', {
+      method: 'get',
+      muteHttpExceptions: true,
+      headers: {
+        apikey: SERVICE_KEY,
+        Authorization: 'Bearer ' + SERVICE_KEY,
+        Prefer: 'count=exact',
+      },
+    });
+
+  var code = resp.getResponseCode();
+  if (code !== 200 && code !== 206) {
+    return { changed: true, signature: last };
+  }
+
+  var headers = resp.getAllHeaders();
+  var range = headers['content-range'] || headers['Content-Range'] || '';
+  var total = String(range).split('/')[1] || '';
+  var rows = JSON.parse(resp.getContentText());
+  var signature = total + '|' + (rows.length ? rows[0].created_at : '');
+
+  if (signature === last && runs + 1 < FULL_SYNC_EVERY_N_RUNS) {
+    props.setProperty('runsSinceFullSync', String(runs + 1));
+    return { changed: false, signature: signature };
+  }
+  return { changed: true, signature: signature };
+}
+
+/** Trigger entry point - skips the pull when nothing changed. */
+function syncNow() { runSync(false); }
+
+/** Menu / manual entry point - always rebuilds. */
+function forceFullSync() { runSync(true); }
+
+/** True between SYNC_ACTIVE_FROM_HOUR and SYNC_ACTIVE_TO_HOUR, project time. */
+function withinSyncWindow() {
+  var hour = Number(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'H'));
+  return hour >= SYNC_ACTIVE_FROM_HOUR && hour < SYNC_ACTIVE_TO_HOUR;
+}
+
+function runSync(force) {
   if (SERVICE_KEY === 'PASTE_YOUR_SERVICE_ROLE_KEY_HERE') {
     throw new Error('Set SERVICE_KEY at the top of the script first.');
   }
+  // Outside the active window, do not even probe - a skipped run costs nothing.
+  if (!force && !withinSyncWindow()) return;
+
+  var probe = probeRecords();
+  if (!force && !probe.changed) return;
+
   var userMap = fetchUserMap();
   var userPlantsMap = fetchUserPlantsMap();
   var machines = fetchMachines();
@@ -230,6 +318,11 @@ function syncNow() {
   // Refresh adoption + OEE-by-line tabs too.
   writeAdoptionSheet(buildAdoption(records, machines, userMap));
   writeOeeByLineSheet(buildOeeByLine(records, userMap));
+
+  // Only now, after a clean run, remember what we synced.
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('lastSyncSignature', probe.signature);
+  props.setProperty('runsSinceFullSync', '0');
 }
 
 /* ------------------------------ App Adoption ----------------------------- */
@@ -659,7 +752,7 @@ function installTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'syncNow') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('syncNow').timeBased().everyMinutes(5).create();
+  ScriptApp.newTrigger('syncNow').timeBased().everyHours(SYNC_INTERVAL_HOURS).create();
   SpreadsheetApp.getActiveSpreadsheet().toast('Auto-sync enabled (every 5 min).');
 }
 
