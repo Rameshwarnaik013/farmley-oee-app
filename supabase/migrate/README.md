@@ -176,18 +176,22 @@ there **cannot be restored**; the local dump in `dump/` is the fallback copy.
 * No orphaned foreign keys on `plant_id` or `created_by`.
 * `GET /auth/v1/health` → 200, `GET /rest/v1/plants` as anon → `[]` (RLS holds).
 
+### Done
+
+* **Apps Script** (2026-11-21). The bound project had **diverged from this
+  repo** - different `RECIPIENTS`, different `HEADERS`, and an extra
+  `fetchMachineStatusDefaults()` planning matrix that is not in version
+  control. It was therefore *patched in place*, not overwritten:
+  `SUPABASE_URL` and `SERVICE_KEY` repointed, plus the probe, the 2-hour
+  interval, the noon-midnight window and `forceFullSync`. `forceFullSync` ran
+  clean (24 s) and the sheet now reads "Last synced: Sat Nov 21 2026 15:23:29
+  GMT+0530". `installTrigger` re-ran: exactly two triggers remain, `syncNow`
+  and `emailLatestAdoption`, with the 5-minute one gone. Project time zone
+  confirmed as Asia/Kolkata, which the window depends on.
+  **The repo copy of `PullFromSupabase.gs` is still not what runs** - treat the
+  live script as the source of truth until someone reconciles the two.
+* The old project is paused, not lost: the dashboard says data remains safe and
+  it is resumable until **26 Dec 2027**.
+
 ### Still to do
 
-1. **Legacy `anon` JWT keys are rejected on this project** — new projects ship
-   with the publishable/secret key scheme. Use the `sb_publishable_...` key
-   above for `VITE_SUPABASE_ANON_KEY`; `@supabase/supabase-js` 2.107 accepts it.
-2. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` on the deployment and
-   redeploy.
-3. Paste the new project's **service_role / secret** key into `SERVICE_KEY` in
-   `PullFromSupabase.gs` (`SUPABASE_URL` is already updated), then run
-   **Force full sync now** and re-run `installTrigger`.
-4. Redeploy the `push-to-sheets` edge function and re-set its
-   `GSHEET_WEBAPP_URL` and `SHARED_SECRET` secrets.
-5. **Confirm a real user can log in.** The bcrypt hashes were copied verbatim,
-   which is the supported way to move users between projects, but it could not
-   be proven here without someone's actual password.
